@@ -1,4 +1,7 @@
 import type { DataPoint } from "./binary-search"
+import rough from "roughjs"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 interface ChartOptions {
   width: number
@@ -35,7 +38,7 @@ interface AxisScale {
 
 const DEFAULT_OPTIONS: ChartOptions = {
   width: 900,
-  height: 400,
+  height: 600,
   padding: 60,
   lineColor: "#22c55e",
   backgroundColor: "#ffffff",
@@ -43,6 +46,38 @@ const DEFAULT_OPTIONS: ChartOptions = {
   textColor: "#374151",
   pointRadius: 4,
   targetPointCount: 15,
+}
+
+const VIRGIL_FONT_PATH = resolve(process.cwd(), "public", "fonts", "Virgil.woff2")
+
+const ROUGHNESS = {
+  chartLine: { roughness: 1.5, bowing: 1.5, strokeWidth: 2.2 },
+  gridLine: { roughness: 0.6, bowing: 0.4, strokeWidth: 1 },
+  frame: { roughness: 1.0, bowing: 1.0, strokeWidth: 1.2 },
+  point: { roughness: 1.2, bowing: 1.0, strokeWidth: 1.4 },
+}
+
+type RoughGenerator = ReturnType<typeof rough.generator>
+
+type Point = Parameters<RoughGenerator["linearPath"]>[0][number]
+
+type PathInfo = ReturnType<RoughGenerator["toPaths"]>[number]
+
+let cachedVirgilFontDataUrl: string | null = null
+
+const getVirgilFontDataUrl = (): string | null => {
+  if (cachedVirgilFontDataUrl !== null) {
+    return cachedVirgilFontDataUrl
+  }
+
+  try {
+    const fontBuffer = readFileSync(VIRGIL_FONT_PATH)
+    cachedVirgilFontDataUrl = `data:font/woff2;base64,${fontBuffer.toString("base64")}`
+  } catch {
+    cachedVirgilFontDataUrl = ""
+  }
+
+  return cachedVirgilFontDataUrl
 }
 
 export class SVGChartGenerator {
@@ -55,6 +90,7 @@ export class SVGChartGenerator {
 
   generate(dataPoints: DataPoint[], repoFullName: string): string {
     const chartArea = this.calculateChartArea()
+    const roughGenerator = this.createRoughGenerator(repoFullName)
 
     if (dataPoints.length === 0) {
       return this.buildEmptyChart(repoFullName, chartArea)
@@ -74,15 +110,15 @@ export class SVGChartGenerator {
     elements.push(this.buildDefs())
     elements.push(this.buildBackground())
     elements.push(this.buildTitle(repoFullName))
-    elements.push(this.buildGridLines(chartArea, yScale))
+    elements.push(this.buildAxisLines(chartArea, roughGenerator))
     elements.push(this.buildYAxis(chartArea, yScale))
     elements.push(this.buildXAxis(chartArea, sortedPoints, dateLabels))
 
     if (displayPoints.length > 1) {
-      elements.push(this.buildPath(pixelPoints))
+      elements.push(this.buildPath(pixelPoints, roughGenerator))
     }
 
-    elements.push(this.buildDataPoints(pixelPoints))
+    elements.push(this.buildDataPoints(pixelPoints, roughGenerator))
     elements.push(this.buildStyles())
 
     return this.wrapSvg(elements.join("\n"))
@@ -106,7 +142,7 @@ export class SVGChartGenerator {
     elements.push(this.buildBackground())
     elements.push(this.buildTitle(repoFullName))
     elements.push(
-      `<text x="${centerX}" y="${centerY}" text-anchor="middle" fill="${this.options.textColor}" font-size="16" font-family="system-ui, sans-serif">No data</text>`
+      `<text x="${centerX}" y="${centerY}" text-anchor="middle" class="chart-text chart-empty">No data</text>`
     )
     elements.push(this.buildStyles())
 
@@ -294,7 +330,7 @@ export class SVGChartGenerator {
   }
 
   private buildBackground(): string {
-    return `<rect width="${this.options.width}" height="${this.options.height}" fill="${this.options.backgroundColor}" rx="8" ry="8" stroke="${this.options.gridColor}" stroke-width="1"/>`
+    return `<rect width="${this.options.width}" height="${this.options.height}" fill="${this.options.backgroundColor}"/>`
   }
 
   private buildTitle(repoFullName: string): string {
@@ -302,23 +338,31 @@ export class SVGChartGenerator {
     const y = this.options.padding / 2 + 10
     const title = `${repoFullName} - Issue History`
 
-    return `<text x="${x}" y="${y}" text-anchor="middle" fill="${this.options.textColor}" font-size="16" font-weight="600" font-family="system-ui, sans-serif">${this.escapeXml(title)}</text>`
+    return `<text x="${x}" y="${y}" text-anchor="middle" class="chart-text chart-title">${this.escapeXml(
+      title
+    )}</text>`
   }
 
-  private buildGridLines(chartArea: ChartArea, yScale: AxisScale): string {
-    const lines: string[] = []
-    const chartHeight = chartArea.bottom - chartArea.top
+  private buildAxisLines(chartArea: ChartArea, roughGenerator: RoughGenerator): string {
+    const axisColor = this.options.gridColor
+    const lines = [
+      roughGenerator.line(chartArea.left, chartArea.top, chartArea.left, chartArea.bottom, {
+        stroke: axisColor,
+        strokeWidth: ROUGHNESS.gridLine.strokeWidth,
+        roughness: ROUGHNESS.gridLine.roughness,
+        bowing: ROUGHNESS.gridLine.bowing,
+      }),
+      roughGenerator.line(chartArea.left, chartArea.bottom, chartArea.right, chartArea.bottom, {
+        stroke: axisColor,
+        strokeWidth: ROUGHNESS.gridLine.strokeWidth,
+        roughness: ROUGHNESS.gridLine.roughness,
+        bowing: ROUGHNESS.gridLine.bowing,
+      }),
+    ]
 
-    for (const value of yScale.values) {
-      const ratio = (value - yScale.min) / (yScale.max - yScale.min)
-      const y = chartArea.bottom - ratio * chartHeight
-
-      lines.push(
-        `<line x1="${chartArea.left}" y1="${y}" x2="${chartArea.right}" y2="${y}" stroke="${this.options.gridColor}" stroke-width="1"/>`
-      )
-    }
-
-    return `<g class="grid-lines">${lines.join("\n")}</g>`
+    return `<g class="axis-lines">${lines
+      .map((line) => this.buildRoughPaths(roughGenerator.toPaths(line)))
+      .join("\n")}</g>`
   }
 
   private buildYAxis(chartArea: ChartArea, yScale: AxisScale): string {
@@ -331,7 +375,9 @@ export class SVGChartGenerator {
       const y = chartArea.bottom - ratio * chartHeight
 
       labels.push(
-        `<text x="${x}" y="${y + 4}" text-anchor="end" fill="${this.options.textColor}" font-size="12" font-family="system-ui, sans-serif">${this.formatNumber(value)}</text>`
+        `<text x="${x}" y="${y + 4}" text-anchor="end" class="chart-text chart-axis">${this.formatNumber(
+          value
+        )}</text>`
       )
     }
 
@@ -361,41 +407,63 @@ export class SVGChartGenerator {
       }
 
       labels.push(
-        `<text x="${x}" y="${y}" text-anchor="middle" fill="${this.options.textColor}" font-size="11" font-family="system-ui, sans-serif">${this.formatDate(date)}</text>`
+        `<text x="${x}" y="${y}" text-anchor="middle" class="chart-text chart-axis chart-axis-x">${this.formatDate(
+          date
+        )}</text>`
       )
     }
 
     return `<g class="x-axis">${labels.join("\n")}</g>`
   }
 
-  private buildPath(pixelPoints: PixelPoint[]): string {
+  private buildPath(
+    pixelPoints: PixelPoint[],
+    roughGenerator: RoughGenerator
+  ): string {
     if (pixelPoints.length < 2) {
       return ""
     }
 
-    const d = this.buildPathD(pixelPoints)
+    const points: Point[] = pixelPoints.map((point) => [point.x, point.y])
+    const roughLine = roughGenerator.linearPath(points, {
+      stroke: this.options.lineColor,
+      strokeWidth: ROUGHNESS.chartLine.strokeWidth,
+      roughness: ROUGHNESS.chartLine.roughness,
+      bowing: ROUGHNESS.chartLine.bowing,
+      preserveVertices: true,
+    })
 
-    return `<path d="${d}" fill="none" stroke="${this.options.lineColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`
+    return `<g class="chart-line">${this.buildRoughPaths(
+      roughGenerator.toPaths(roughLine)
+    )}</g>`
   }
 
-  private buildPathD(points: PixelPoint[]): string {
-    const parts: string[] = []
-
-    parts.push(`M ${points[0].x} ${points[0].y}`)
-
-    for (let i = 1; i < points.length; i++) {
-      parts.push(`L ${points[i].x} ${points[i].y}`)
-    }
-
-    return parts.join(" ")
-  }
-
-  private buildDataPoints(pixelPoints: PixelPoint[]): string {
+  private buildDataPoints(
+    pixelPoints: PixelPoint[],
+    roughGenerator: RoughGenerator
+  ): string {
     const circles: string[] = []
 
     for (const point of pixelPoints) {
+      const roughCircle = roughGenerator.circle(
+        point.x,
+        point.y,
+        this.options.pointRadius * 2,
+        {
+          stroke: this.options.lineColor,
+          strokeWidth: ROUGHNESS.point.strokeWidth,
+          roughness: ROUGHNESS.point.roughness,
+          bowing: ROUGHNESS.point.bowing,
+          fill: this.options.backgroundColor,
+          fillStyle: "solid",
+        }
+      )
       circles.push(
-        `<circle cx="${point.x}" cy="${point.y}" r="${this.options.pointRadius}" data-date="${point.date}" data-count="${point.count}" class="data-point"/>`
+        this.buildRoughPaths(roughGenerator.toPaths(roughCircle), {
+          class: "data-point",
+          "data-date": point.date,
+          "data-count": String(point.count),
+        })
       )
     }
 
@@ -403,13 +471,41 @@ export class SVGChartGenerator {
   }
 
   private buildStyles(): string {
+    const virgilFontDataUrl = getVirgilFontDataUrl()
+    const virgilFontFace = virgilFontDataUrl
+      ? `@font-face {
+      font-family: "Virgil";
+      src: url("${virgilFontDataUrl}") format("woff2");
+      font-display: swap;
+    }`
+      : ""
+
     return `<style>
-    .data-point { 
-      fill: ${this.options.lineColor}; 
-      cursor: pointer;
-      transition: r 0.15s ease;
+    ${virgilFontFace}
+    .chart-text {
+      font-family: "Virgil", "Segoe UI", system-ui, sans-serif;
+      fill: ${this.options.textColor};
     }
-    .data-point:hover { r: 8; }
+    .chart-title {
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .chart-axis {
+      font-size: 12px;
+    }
+    .chart-axis-x {
+      font-size: 11px;
+    }
+    .chart-empty {
+      font-size: 16px;
+    }
+    .data-point {
+      cursor: pointer;
+      transition: transform 0.15s ease;
+      transform-box: fill-box;
+      transform-origin: center;
+    }
+    .data-point:hover { transform: scale(1.3); }
   </style>`
   }
 
@@ -499,5 +595,42 @@ ${content}
     }
 
     return { x: sumX / count, y: sumY / count }
+  }
+
+  private createRoughGenerator(seedInput: string): RoughGenerator {
+    const seed = this.hashSeed(seedInput)
+    return rough.generator({ options: { seed } })
+  }
+
+  private hashSeed(value: string): number {
+    let hash = 0
+    for (let i = 0; i < value.length; i++) {
+      hash = (hash << 5) - hash + value.charCodeAt(i)
+      hash |= 0
+    }
+    return Math.abs(hash) || 1
+  }
+
+  private buildRoughPaths(
+    paths: PathInfo[],
+    attributes: Record<string, string> = {}
+  ): string {
+    const attributeString = Object.entries(attributes)
+      .map(([key, value]) => `${key}="${this.escapeXml(value)}"`)
+      .join(" ")
+
+    return paths
+      .map((path) => {
+        const fill = path.fill ? `fill=\"${path.fill}\"` : "fill=\"none\""
+        const stroke = path.stroke ? `stroke=\"${path.stroke}\"` : ""
+        const strokeWidth = path.strokeWidth
+          ? `stroke-width=\"${path.strokeWidth}\"`
+          : ""
+        const attrs = [stroke, strokeWidth, fill, attributeString]
+          .filter(Boolean)
+          .join(" ")
+        return `<path d="${path.d}" ${attrs}/>`
+      })
+      .join("\n")
   }
 }

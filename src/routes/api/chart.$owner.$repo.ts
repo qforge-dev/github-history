@@ -8,10 +8,10 @@ function createErrorSvg(message: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="400" viewBox="0 0 900 400">
-  <rect width="900" height="400" fill="#ffffff" rx="8" ry="8" stroke="#e5e7eb" stroke-width="1"/>
-  <text x="450" y="190" text-anchor="middle" fill="#dc2626" font-size="16" font-weight="600" font-family="system-ui, sans-serif">Error</text>
-  <text x="450" y="220" text-anchor="middle" fill="#374151" font-size="14" font-family="system-ui, sans-serif">${escapedMessage}</text>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600" viewBox="0 0 900 600">
+  <rect width="900" height="600" fill="#ffffff" rx="8" ry="8" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="450" y="290" text-anchor="middle" fill="#dc2626" font-size="16" font-weight="600" font-family="system-ui, sans-serif">Error</text>
+  <text x="450" y="320" text-anchor="middle" fill="#374151" font-size="14" font-family="system-ui, sans-serif">${escapedMessage}</text>
 </svg>`
 }
 
