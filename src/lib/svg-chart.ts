@@ -3,7 +3,7 @@ import rough from "roughjs"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
-interface ChartOptions {
+export interface ChartOptions {
   width: number
   height: number
   padding: number
@@ -13,6 +13,8 @@ interface ChartOptions {
   textColor: string
   pointRadius: number
   targetPointCount: number
+  logScale: boolean
+  alignTimelines: boolean
 }
 
 interface ChartArea {
@@ -52,6 +54,8 @@ const DEFAULT_OPTIONS: ChartOptions = {
   textColor: "#374151",
   pointRadius: 4,
   targetPointCount: 15,
+  logScale: false,
+  alignTimelines: false,
 }
 
 const SERIES_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"]
@@ -64,6 +68,8 @@ const ROUGHNESS = {
   frame: { roughness: 1.0, bowing: 1.0, strokeWidth: 1.2 },
   point: { roughness: 1.2, bowing: 1.0, strokeWidth: 1.4 },
 }
+
+const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30
 
 type RoughGenerator = ReturnType<typeof rough.generator>
 
@@ -99,6 +105,7 @@ export class SVGChartGenerator {
   generate(dataPoints: DataPoint[], repoFullName: string): string {
     const chartArea = this.calculateChartArea()
     const roughGenerator = this.createRoughGenerator(repoFullName)
+    const logScale = this.options.logScale
 
     if (dataPoints.length === 0) {
       return this.buildEmptyChart(`${repoFullName} - Issue History`, chartArea)
@@ -109,8 +116,10 @@ export class SVGChartGenerator {
     )
     const displayPoints = this.decimatePoints(sortedPoints)
 
-    const pixelPoints = this.mapDataToPixels(displayPoints, chartArea)
-    const yScale = this.calculateYAxisScale(displayPoints)
+    const pixelPoints = this.mapDataToPixels(displayPoints, chartArea, {
+      logScale,
+    })
+    const yScale = this.calculateYAxisScale(displayPoints, logScale)
     const dateLabels = this.selectDateLabels(displayPoints)
 
     const elements: string[] = []
@@ -119,7 +128,7 @@ export class SVGChartGenerator {
     elements.push(this.buildBackground())
     elements.push(this.buildTitle(`${repoFullName} - Issue History`))
     elements.push(this.buildAxisLines(chartArea, roughGenerator))
-    elements.push(this.buildYAxis(chartArea, yScale))
+    elements.push(this.buildYAxis(chartArea, yScale, logScale))
     elements.push(this.buildXAxis(chartArea, sortedPoints, dateLabels))
 
     if (displayPoints.length > 1) {
@@ -144,6 +153,8 @@ export class SVGChartGenerator {
   generateMultiSeries(series: ChartSeries[], title = "Issue History Comparison"): string {
     const chartArea = this.calculateChartArea()
     const visibleSeries = series.filter((entry) => entry.dataPoints.length > 0)
+    const logScale = this.options.logScale
+    const alignTimelines = this.options.alignTimelines
 
     if (visibleSeries.length === 0) {
       return this.buildEmptyChart(title, chartArea)
@@ -151,18 +162,24 @@ export class SVGChartGenerator {
 
     const roughGenerator = this.createRoughGenerator(title)
     const seriesWithColors = this.assignSeriesColors(visibleSeries)
-    const allPoints = seriesWithColors.flatMap((entry) => entry.dataPoints)
+    const normalized = alignTimelines
+      ? this.normalizeSeriesToElapsedTime(seriesWithColors)
+      : { series: seriesWithColors, maxElapsedMs: null as number | null }
+    const activeSeries = normalized.series
+    const allPoints = activeSeries.flatMap((entry) => entry.dataPoints)
     const sortedAllPoints = [...allPoints].sort(
       (a, b) => a.date.getTime() - b.date.getTime()
     )
-    const minDate = sortedAllPoints[0].date.getTime()
-    const maxDate = sortedAllPoints[sortedAllPoints.length - 1].date.getTime()
+    const minDate = alignTimelines ? 0 : sortedAllPoints[0].date.getTime()
+    const maxDate = alignTimelines
+      ? this.calculateElapsedScale(normalized.maxElapsedMs ?? 0).maxElapsedMs
+      : sortedAllPoints[sortedAllPoints.length - 1].date.getTime()
     const counts = sortedAllPoints.map((point) => point.count)
     const minCount = Math.min(...counts)
     const maxCount = Math.max(...counts)
 
-    const yScale = this.calculateAxisScale(minCount, maxCount)
-    const dateLabels = this.selectDateLabels(sortedAllPoints)
+    const yScale = this.calculateYAxisScaleFromRange(minCount, maxCount, logScale)
+    const dateLabels = alignTimelines ? [] : this.selectDateLabels(sortedAllPoints)
 
     const elements: string[] = []
 
@@ -170,11 +187,16 @@ export class SVGChartGenerator {
     elements.push(this.buildBackground())
     elements.push(this.buildTitle(title))
     elements.push(this.buildAxisLines(chartArea, roughGenerator))
-    elements.push(this.buildYAxis(chartArea, yScale))
-    elements.push(this.buildXAxisWithRange(chartArea, minDate, maxDate, dateLabels))
-    elements.push(this.buildLegend(seriesWithColors, chartArea))
+    elements.push(this.buildYAxis(chartArea, yScale, logScale))
+    if (alignTimelines) {
+      const elapsedScale = this.calculateElapsedScale(normalized.maxElapsedMs ?? 0)
+      elements.push(this.buildXAxisElapsedTime(chartArea, elapsedScale.maxMonths, elapsedScale.values))
+    } else {
+      elements.push(this.buildXAxisWithRange(chartArea, minDate, maxDate, dateLabels))
+    }
+    elements.push(this.buildLegend(activeSeries, chartArea))
 
-    for (const entry of seriesWithColors) {
+    for (const entry of activeSeries) {
       const sortedPoints = [...entry.dataPoints].sort(
         (a, b) => a.date.getTime() - b.date.getTime()
       )
@@ -184,6 +206,10 @@ export class SVGChartGenerator {
         maxDate,
         minCount,
         maxCount,
+        logScale,
+        formatDate: alignTimelines
+          ? (date) => this.formatElapsedMonths(date.getTime())
+          : undefined,
       })
 
       if (pixelPoints.length > 1) {
@@ -239,20 +265,31 @@ export class SVGChartGenerator {
   private mapDataToPixels(
     dataPoints: DataPoint[],
     chartArea: ChartArea,
-    scale?: { minDate: number; maxDate: number; minCount: number; maxCount: number }
+    scale?: {
+      minDate?: number
+      maxDate?: number
+      minCount?: number
+      maxCount?: number
+      logScale?: boolean
+      formatDate?: (date: Date) => string
+    }
   ): PixelPoint[] {
     if (dataPoints.length === 0) {
       return []
     }
 
-    const minDate = scale ? scale.minDate : dataPoints[0].date.getTime()
-    const maxDate = scale ? scale.maxDate : dataPoints[dataPoints.length - 1].date.getTime()
+    const minDate = scale?.minDate ?? dataPoints[0].date.getTime()
+    const maxDate = scale?.maxDate ?? dataPoints[dataPoints.length - 1].date.getTime()
     const dateRange = maxDate - minDate
 
     const counts = dataPoints.map((p) => p.count)
-    const minCount = scale ? scale.minCount : Math.min(...counts)
-    const maxCount = scale ? scale.maxCount : Math.max(...counts)
-    const countRange = maxCount - minCount
+    const minCount = scale?.minCount ?? Math.min(...counts)
+    const maxCount = scale?.maxCount ?? Math.max(...counts)
+    const logScale = scale?.logScale ?? this.options.logScale
+    const countTransform = this.getCountTransform(logScale)
+    const transformedMin = countTransform(minCount)
+    const transformedMax = countTransform(maxCount)
+    const countRange = transformedMax - transformedMin
 
     const chartWidth = chartArea.right - chartArea.left
     const chartHeight = chartArea.bottom - chartArea.top
@@ -270,25 +307,82 @@ export class SVGChartGenerator {
       if (countRange === 0) {
         y = chartArea.top + chartHeight / 2
       } else {
-        const countRatio = (point.count - minCount) / countRange
+        const countRatio = (countTransform(point.count) - transformedMin) / countRange
         y = chartArea.bottom - countRatio * chartHeight
       }
 
       return {
         x,
         y,
-        date: this.formatDateISO(point.date),
+        date: scale?.formatDate ? scale.formatDate(point.date) : this.formatDateISO(point.date),
         count: point.count,
       }
     })
   }
 
-  private calculateYAxisScale(dataPoints: DataPoint[]): AxisScale {
+  private calculateYAxisScale(dataPoints: DataPoint[], logScale: boolean): AxisScale {
     const counts = dataPoints.map((p) => p.count)
     const minCount = Math.min(...counts)
     const maxCount = Math.max(...counts)
 
-    return this.calculateAxisScale(minCount, maxCount)
+    return this.calculateYAxisScaleFromRange(minCount, maxCount, logScale)
+  }
+
+  private calculateYAxisScaleFromRange(
+    minCount: number,
+    maxCount: number,
+    logScale: boolean
+  ): AxisScale {
+    return logScale
+      ? this.calculateLogAxisScale(minCount, maxCount)
+      : this.calculateAxisScale(minCount, maxCount)
+  }
+
+  private calculateLogAxisScale(minCount: number, maxCount: number): AxisScale {
+    if (minCount === maxCount) {
+      const padding = minCount === 0 ? 1 : Math.ceil(minCount * 0.1)
+      return {
+        min: Math.max(0, minCount - padding),
+        max: maxCount + padding,
+        step: padding,
+        values: [Math.max(0, minCount - padding), minCount, maxCount + padding],
+      }
+    }
+
+    const safeMin = Math.max(0, minCount)
+    const safeMax = Math.max(safeMin + 1, maxCount)
+    const minExp = Math.floor(Math.log10(safeMin + 1))
+    const maxExp = Math.ceil(Math.log10(safeMax + 1))
+
+    const values: number[] = []
+    if (safeMin === 0) {
+      values.push(0)
+    }
+
+    for (let exp = minExp; exp <= maxExp; exp++) {
+      const value = Math.pow(10, exp)
+      if (value >= safeMin && value <= safeMax) {
+        values.push(value)
+      }
+    }
+
+    if (values.length === 0) {
+      values.push(safeMin, safeMax)
+    } else {
+      if (values[0] !== safeMin) {
+        values.unshift(safeMin)
+      }
+      if (values[values.length - 1] !== safeMax) {
+        values.push(safeMax)
+      }
+    }
+
+    return {
+      min: safeMin,
+      max: safeMax,
+      step: values.length > 1 ? values[1] - values[0] : safeMax - safeMin,
+      values,
+    }
   }
 
   private calculateAxisScale(min: number, max: number): AxisScale {
@@ -485,13 +579,17 @@ export class SVGChartGenerator {
       .join("\n")}</g>`
   }
 
-  private buildYAxis(chartArea: ChartArea, yScale: AxisScale): string {
+  private buildYAxis(chartArea: ChartArea, yScale: AxisScale, logScale: boolean): string {
     const labels: string[] = []
     const chartHeight = chartArea.bottom - chartArea.top
     const x = chartArea.left - 10
+    const countTransform = this.getCountTransform(logScale)
+    const transformedMin = countTransform(yScale.min)
+    const transformedMax = countTransform(yScale.max)
+    const range = transformedMax - transformedMin
 
     for (const value of yScale.values) {
-      const ratio = (value - yScale.min) / (yScale.max - yScale.min)
+      const ratio = range === 0 ? 0.5 : (countTransform(value) - transformedMin) / range
       const y = chartArea.bottom - ratio * chartHeight
 
       labels.push(
@@ -672,6 +770,11 @@ ${content}
     return date.toISOString().split("T")[0]
   }
 
+  private formatElapsedMonths(milliseconds: number): string {
+    const months = Math.max(0, Math.round(milliseconds / MS_PER_MONTH))
+    return `${months} month${months === 1 ? "" : "s"}`
+  }
+
   private formatNumber(n: number): string {
     if (n >= 1000000) {
       const value = n / 1000000
@@ -765,5 +868,88 @@ ${content}
         return `<path d="${path.d}" ${attrs}/>`
       })
       .join("\n")
+  }
+
+  private getCountTransform(logScale: boolean): (value: number) => number {
+    return logScale ? (value) => Math.log10(value + 1) : (value) => value
+  }
+
+  private normalizeSeriesToElapsedTime(series: ChartSeries[]): {
+    series: ChartSeries[]
+    maxElapsedMs: number
+  } {
+    let maxElapsedMs = 0
+    const normalizedSeries = series.map((entry) => {
+      const sorted = [...entry.dataPoints].sort(
+        (a, b) => a.date.getTime() - b.date.getTime()
+      )
+      const startDate = sorted[0].date.getTime()
+      const normalizedPoints = sorted.map((point) => {
+        const elapsedMs = point.date.getTime() - startDate
+        if (elapsedMs > maxElapsedMs) {
+          maxElapsedMs = elapsedMs
+        }
+        return {
+          date: new Date(elapsedMs),
+          count: point.count,
+        }
+      })
+
+      return {
+        ...entry,
+        dataPoints: normalizedPoints,
+      }
+    })
+
+    return { series: normalizedSeries, maxElapsedMs }
+  }
+
+  private calculateElapsedScale(maxElapsedMs: number): {
+    maxElapsedMs: number
+    maxMonths: number
+    values: number[]
+  } {
+    const maxMonths = Math.max(0, Math.ceil(maxElapsedMs / MS_PER_MONTH))
+    if (maxMonths === 0) {
+      return { maxElapsedMs: 0, maxMonths: 0, values: [0] }
+    }
+
+    const step = Math.max(1, Math.ceil(maxMonths / 6))
+    const values: number[] = []
+    for (let v = 0; v <= maxMonths; v += step) {
+      values.push(v)
+    }
+    if (values[values.length - 1] !== maxMonths) {
+      values.push(maxMonths)
+    }
+
+    return {
+      maxElapsedMs: maxMonths * MS_PER_MONTH,
+      maxMonths,
+      values,
+    }
+  }
+
+  private buildXAxisElapsedTime(
+    chartArea: ChartArea,
+    maxMonths: number,
+    monthValues: number[]
+  ): string {
+    const labels: string[] = []
+    const y = chartArea.bottom + 20
+    const chartWidth = chartArea.right - chartArea.left
+
+    for (const months of monthValues) {
+      const ratio = maxMonths === 0 ? 0.5 : months / maxMonths
+      const x = chartArea.left + ratio * chartWidth
+
+      labels.push(
+        `<text x="${x}" y="${y}" text-anchor="middle" class="chart-text chart-axis chart-axis-x">${this.formatElapsedMonths(
+          months * MS_PER_MONTH
+        )}</text>`
+      )
+    }
+
+    return `<g class="x-axis">${labels.join("\n")}</g>`
   }
 }

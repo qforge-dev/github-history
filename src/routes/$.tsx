@@ -32,6 +32,8 @@ export function RepoComparisonPage() {
   const [svgContent, setSvgContent] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [logScale, setLogScale] = useState(false)
+  const [alignTimelines, setAlignTimelines] = useState(false)
   const [tooltip, setTooltip] = useState<TooltipState>({
     visible: false,
     x: 0,
@@ -50,6 +52,12 @@ export function RepoComparisonPage() {
   }, [navigate, normalizedPath, rawPath])
 
   useEffect(() => {
+    if (repos.length < 2 && alignTimelines) {
+      setAlignTimelines(false)
+    }
+  }, [alignTimelines, repos.length])
+
+  useEffect(() => {
     async function fetchChart() {
       if (error) {
         setErrorMessage(error)
@@ -63,7 +71,15 @@ export function RepoComparisonPage() {
       setSvgContent(null)
 
       try {
-        const response = await fetch(`/api/chart?repos=${encodeURIComponent(repoKey)}`)
+        const params = new URLSearchParams({ repos: repoKey })
+        if (logScale) {
+          params.set("logScale", "true")
+        }
+        if (alignTimelines && repos.length > 1) {
+          params.set("alignTimelines", "true")
+        }
+
+        const response = await fetch(`/api/chart?${params.toString()}`)
         const text = await response.text()
 
         if (!response.ok) {
@@ -84,7 +100,7 @@ export function RepoComparisonPage() {
     if (repoKey) {
       fetchChart()
     }
-  }, [error, repoKey])
+  }, [alignTimelines, error, logScale, repoKey, repos.length])
 
   useEffect(() => {
     const container = chartContainerRef.current
@@ -172,6 +188,29 @@ export function RepoComparisonPage() {
             ))}
           </div>
         )}
+
+        <div className="flex flex-wrap justify-center gap-4 mb-6 text-gray-300">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={logScale}
+              onChange={(event) => setLogScale(event.target.checked)}
+              className="h-4 w-4 accent-cyan-400"
+            />
+            Log Scale
+          </label>
+          {repos.length > 1 && (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={alignTimelines}
+                onChange={(event) => setAlignTimelines(event.target.checked)}
+                className="h-4 w-4 accent-cyan-400"
+              />
+              Align Timelines
+            </label>
+          )}
+        </div>
 
         {isLoading && (
           <div className="flex justify-center items-center py-20">

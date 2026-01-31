@@ -22,6 +22,8 @@ export const Route = createFileRoute("/api/chart")({
       GET: async ({ request }) => {
         const url = new URL(request.url)
         const reposParam = url.searchParams.get("repos")
+        const logScale = url.searchParams.get("logScale") === "true"
+        const alignTimelines = url.searchParams.get("alignTimelines") === "true"
 
         if (!reposParam) {
           return new Response(createErrorSvg("Missing repos query parameter"), {
@@ -45,7 +47,10 @@ export const Route = createFileRoute("/api/chart")({
         }
 
         try {
-          const svg = await issueHistoryService.getMultiRepoIssueHistorySVG(repos)
+          const svg = await issueHistoryService.getMultiRepoIssueHistorySVG(repos, {
+            logScale,
+            alignTimelines,
+          })
 
           return new Response(svg, {
             status: 200,

@@ -3,6 +3,7 @@ import { AdaptiveResolutionFetcher, createDefaultConfig } from "./binary-search"
 import type { DataPoint } from "./binary-search"
 import { IssueHistoryCache } from "./cache"
 import { SVGChartGenerator } from "./svg-chart"
+import type { ChartOptions } from "./svg-chart"
 
 const CACHE_FRESHNESS_HOURS = 24
 
@@ -17,13 +18,19 @@ class IssueHistoryService {
     this.chartGenerator = new SVGChartGenerator()
   }
 
-  async getIssueHistorySVG(owner: string, repo: string): Promise<string> {
+  async getIssueHistorySVG(
+    owner: string,
+    repo: string,
+    options?: Partial<ChartOptions>
+  ): Promise<string> {
     const dataPoints = await this.getIssueHistoryDataPoints(owner, repo)
-    return this.chartGenerator.generate(dataPoints, `${owner}/${repo}`)
+    const chartGenerator = options ? new SVGChartGenerator(options) : this.chartGenerator
+    return chartGenerator.generate(dataPoints, `${owner}/${repo}`)
   }
 
   async getMultiRepoIssueHistorySVG(
-    repos: Array<{ owner: string; repo: string }>
+    repos: Array<{ owner: string; repo: string }>,
+    options?: Partial<ChartOptions>
   ): Promise<string> {
     const series = await Promise.all(
       repos.map(async ({ owner, repo }) => {
@@ -32,7 +39,8 @@ class IssueHistoryService {
       })
     )
 
-    return this.chartGenerator.generateMultiSeries(series)
+    const chartGenerator = options ? new SVGChartGenerator(options) : this.chartGenerator
+    return chartGenerator.generateMultiSeries(series)
   }
 
   async getIssueHistoryDataPoints(owner: string, repo: string): Promise<DataPoint[]> {

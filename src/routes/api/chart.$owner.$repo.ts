@@ -18,8 +18,10 @@ function createErrorSvg(message: string): string {
 export const Route = createFileRoute("/api/chart/$owner/$repo")({
   server: {
     handlers: {
-      GET: async ({ params }) => {
+      GET: async ({ params, request }) => {
         const { owner, repo } = params
+        const url = new URL(request.url)
+        const logScale = url.searchParams.get("logScale") === "true"
 
         if (!owner || !repo) {
           return new Response(createErrorSvg("Missing owner or repo parameter"), {
@@ -31,7 +33,9 @@ export const Route = createFileRoute("/api/chart/$owner/$repo")({
         }
 
         try {
-          const svg = await issueHistoryService.getIssueHistorySVG(owner, repo)
+          const svg = await issueHistoryService.getIssueHistorySVG(owner, repo, {
+            logScale,
+          })
 
           return new Response(svg, {
             status: 200,
