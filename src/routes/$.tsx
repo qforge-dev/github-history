@@ -12,12 +12,14 @@ interface TooltipState {
   date: string
   count: string
   repo: string
+  series: string
 }
 
 export function RepoComparisonPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const chartContainerRef = useRef<HTMLDivElement>(null)
+  const copyTimeoutRef = useRef<number | null>(null)
 
   const rawPath = useMemo(() => {
     const cleaned = location.pathname.replace(/^\/+/, "")
@@ -34,6 +36,9 @@ export function RepoComparisonPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [logScale, setLogScale] = useState(false)
   const [alignTimelines, setAlignTimelines] = useState(false)
+  const [showClosed, setShowClosed] = useState(false)
+  const [copiedAction, setCopiedAction] = useState<"svg" | "embed" | null>(null)
+  const [isDownloading, setIsDownloading] = useState(false)
   const [tooltip, setTooltip] = useState<TooltipState>({
     visible: false,
     x: 0,
@@ -41,9 +46,48 @@ export function RepoComparisonPage() {
     date: "",
     count: "",
     repo: "",
+    series: "",
   })
 
   const repoKey = useMemo(() => repos.map((repo) => repo.fullName).join("&"), [repos])
+  const chartPath = normalizedPath ?? rawPath
+  const chartUrl = useMemo(() => {
+    if (!chartPath) {
+      return "https://github-history.com/"
+    }
+
+    const safePath = encodeURI(chartPath)
+    return `https://github-history.com/${safePath}`
+  }, [chartPath])
+  const svgUrl = useMemo(() => {
+    if (!repoKey) {
+      return "https://github-history.com/api/svg"
+    }
+
+    const params = new URLSearchParams({ repos: repoKey })
+    if (logScale) {
+      params.set("logScale", "true")
+    }
+    if (alignTimelines && repos.length > 1) {
+      params.set("alignTimelines", "true")
+    }
+    if (showClosed) {
+      params.set("showClosed", "true")
+    }
+
+    return `https://github-history.com/api/svg?${params.toString()}`
+  }, [alignTimelines, logScale, repoKey, repos.length, showClosed])
+  const embedSnippet = useMemo(() => {
+    return `## Issue History\n\n[![Issue History Chart](${svgUrl})](${chartUrl})`
+  }, [chartUrl, svgUrl])
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (normalizedPath && normalizedPath !== rawPath) {
@@ -78,6 +122,9 @@ export function RepoComparisonPage() {
         if (alignTimelines && repos.length > 1) {
           params.set("alignTimelines", "true")
         }
+        if (showClosed) {
+          params.set("showClosed", "true")
+        }
 
         const response = await fetch(`/api/chart?${params.toString()}`)
         const text = await response.text()
@@ -100,7 +147,7 @@ export function RepoComparisonPage() {
     if (repoKey) {
       fetchChart()
     }
-  }, [alignTimelines, error, logScale, repoKey, repos.length])
+  }, [alignTimelines, error, logScale, repoKey, repos.length, showClosed])
 
   useEffect(() => {
     const container = chartContainerRef.current
@@ -112,6 +159,7 @@ export function RepoComparisonPage() {
         const date = target.getAttribute("data-date") || ""
         const count = target.getAttribute("data-count") || ""
         const repo = target.getAttribute("data-repo") || ""
+        const series = target.getAttribute("data-series") || ""
         setTooltip({
           visible: true,
           x: event.clientX,
@@ -119,6 +167,7 @@ export function RepoComparisonPage() {
           date,
           count,
           repo,
+          series,
         })
       }
     }
@@ -152,6 +201,115 @@ export function RepoComparisonPage() {
     }
   }, [svgContent])
 
+  function resetCopyState() {
+    if (copyTimeoutRef.current) {
+      window.clearTimeout(copyTimeoutRef.current)
+    }
+
+    copyTimeoutRef.current = window.setTimeout(() => {
+      setCopiedAction(null)
+    }, 1500)
+  }
+
+  async function handleCopySvgUrl() {
+    try {
+      await navigator.clipboard.writeText(svgUrl)
+      setCopiedAction("svg")
+      resetCopyState()
+    } catch {
+      setCopiedAction(null)
+    }
+  }
+
+  async function handleCopyEmbedSnippet() {
+    try {
+      await navigator.clipboard.writeText(embedSnippet)
+      setCopiedAction("embed")
+      resetCopyState()
+    } catch {
+      setCopiedAction(null)
+    }
+  }
+
+  function extractSvgSize(svg: string): { width: number; height: number } {
+    const widthMatch = svg.match(/width="([\d.]+)"/)
+    const heightMatch = svg.match(/height="([\d.]+)"/)
+    if (widthMatch && heightMatch) {
+      return {
+        width: Number.parseFloat(widthMatch[1]),
+        height: Number.parseFloat(heightMatch[1]),
+      }
+    }
+
+    const viewBoxMatch = svg.match(/viewBox="([\d.\s]+)"/)
+    if (viewBoxMatch) {
+      const parts = viewBoxMatch[1].trim().split(/\s+/)
+      if (parts.length === 4) {
+        return {
+          width: Number.parseFloat(parts[2]),
+          height: Number.parseFloat(parts[3]),
+        }
+      }
+    }
+
+    return { width: 900, height: 600 }
+  }
+
+  async function handleDownloadPng() {
+    if (!svgContent || isDownloading) {
+      return
+    }
+
+    setIsDownloading(true)
+
+    try {
+      const { width, height } = extractSvgSize(svgContent)
+      const svgBlob = new Blob([svgContent], { type: "image/svg+xml;charset=utf-8" })
+      const url = URL.createObjectURL(svgBlob)
+
+      const image = new Image()
+      const canvas = document.createElement("canvas")
+      canvas.width = width
+      canvas.height = height
+
+      const ctx = canvas.getContext("2d")
+      if (!ctx) {
+        URL.revokeObjectURL(url)
+        return
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => {
+          ctx.fillStyle = "#ffffff"
+          ctx.fillRect(0, 0, width, height)
+          ctx.drawImage(image, 0, 0, width, height)
+          resolve()
+        }
+        image.onerror = () => reject(new Error("Failed to load svg"))
+        image.src = url
+      })
+
+      URL.revokeObjectURL(url)
+
+      const pngBlob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/png")
+      )
+
+      if (!pngBlob) {
+        return
+      }
+
+      const downloadUrl = URL.createObjectURL(pngBlob)
+      const link = document.createElement("a")
+      link.href = downloadUrl
+      link.download = "issue-history.png"
+      link.click()
+      URL.revokeObjectURL(downloadUrl)
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
   const title =
     repos.length > 1
       ? "Issue History Comparison"
@@ -170,7 +328,7 @@ export function RepoComparisonPage() {
 
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-white mb-2">{title}</h1>
-          <p className="text-gray-400">Open Issues Over Time</p>
+          <p className="text-gray-400">Issues Over Time</p>
         </div>
 
         {repos.length > 1 && (
@@ -198,6 +356,15 @@ export function RepoComparisonPage() {
               className="h-4 w-4 accent-cyan-400"
             />
             Log Scale
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showClosed}
+              onChange={(event) => setShowClosed(event.target.checked)}
+              className="h-4 w-4 accent-cyan-400"
+            />
+            Show Closed
           </label>
           {repos.length > 1 && (
             <label className="flex items-center gap-2 cursor-pointer">
@@ -228,11 +395,55 @@ export function RepoComparisonPage() {
         )}
 
         {svgContent && !isLoading && (
-          <div
-            ref={chartContainerRef}
-            className="bg-white rounded-lg shadow-lg overflow-hidden"
-            dangerouslySetInnerHTML={{ __html: svgContent }}
-          />
+          <div className="space-y-6">
+            <div
+              ref={chartContainerRef}
+              className="bg-white rounded-lg shadow-lg overflow-hidden"
+              dangerouslySetInnerHTML={{ __html: svgContent }}
+            />
+            <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Share & Embed</h2>
+                  <p className="text-sm text-slate-400">
+                    Copy a link, download a PNG, or embed the SVG.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleCopySvgUrl}
+                    className="bg-slate-700 text-white hover:bg-slate-600"
+                  >
+                    {copiedAction === "svg" ? "Copied" : "Copy SVG"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleDownloadPng}
+                    className="bg-slate-700 text-white hover:bg-slate-600"
+                  >
+                    {isDownloading ? "Preparing PNG" : "Download PNG"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleCopyEmbedSnippet}
+                    className="bg-slate-700 text-white hover:bg-slate-600"
+                  >
+                    {copiedAction === "embed" ? "Copied" : "Copy Embed Snippet"}
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Embed snippet</div>
+                <pre className="mt-2 max-h-56 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-200">
+                  {embedSnippet}
+                </pre>
+              </div>
+            </div>
+          </div>
         )}
 
         {tooltip.visible && (
@@ -244,8 +455,11 @@ export function RepoComparisonPage() {
             }}
           >
             <div className="font-medium">{tooltip.repo}</div>
+            {tooltip.series && (
+              <div className="text-gray-300">{tooltip.series}</div>
+            )}
             <div className="text-gray-300">{tooltip.date}</div>
-            <div className="text-cyan-400">{tooltip.count} open issues</div>
+            <div className="text-cyan-400">{tooltip.count} issues</div>
           </div>
         )}
       </div>

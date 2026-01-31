@@ -61,7 +61,7 @@ function extractReposParam(url: URL): string | null {
   return reposSegments.length > 0 ? reposSegments.join("&") : direct
 }
 
-export const Route = createFileRoute("/api/chart")({
+export const Route = createFileRoute("/api/svg")({
   server: {
     handlers: {
       GET: async ({ request }) => {

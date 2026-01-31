@@ -15,6 +15,7 @@ export interface ChartOptions {
   targetPointCount: number
   logScale: boolean
   alignTimelines: boolean
+  showClosed: boolean
 }
 
 interface ChartArea {
@@ -56,6 +57,7 @@ const DEFAULT_OPTIONS: ChartOptions = {
   targetPointCount: 15,
   logScale: false,
   alignTimelines: false,
+  showClosed: false,
 }
 
 const SERIES_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"]
@@ -106,6 +108,7 @@ export class SVGChartGenerator {
     const chartArea = this.calculateChartArea()
     const roughGenerator = this.createRoughGenerator(repoFullName)
     const logScale = this.options.logScale
+    const showClosed = this.options.showClosed
 
     if (dataPoints.length === 0) {
       return this.buildEmptyChart(`${repoFullName} - Issue History`, chartArea)
@@ -115,10 +118,21 @@ export class SVGChartGenerator {
       (a, b) => a.date.getTime() - b.date.getTime()
     )
     const displayPoints = this.decimatePoints(sortedPoints)
+    const closedPoints = showClosed
+      ? displayPoints.map((point) => ({
+          ...point,
+          count: point.closedCount,
+        }))
+      : []
 
     const pixelPoints = this.mapDataToPixels(displayPoints, chartArea, {
       logScale,
     })
+    const pixelClosedPoints = showClosed
+      ? this.mapDataToPixels(closedPoints, chartArea, {
+          logScale,
+        })
+      : []
     const yScale = this.calculateYAxisScale(displayPoints, logScale)
     const dateLabels = this.selectDateLabels(displayPoints)
 
@@ -131,10 +145,21 @@ export class SVGChartGenerator {
     elements.push(this.buildAxisLines(chartArea, roughGenerator))
     elements.push(this.buildYAxis(chartArea, yScale, logScale))
     elements.push(this.buildXAxis(chartArea, sortedPoints, dateLabels))
+    if (showClosed) {
+      elements.push(this.buildLineStyleLegend(chartArea, roughGenerator))
+    }
 
     if (displayPoints.length > 1) {
       elements.push(
         this.buildPath(pixelPoints, roughGenerator, this.options.lineColor)
+      )
+    }
+
+    if (showClosed && pixelClosedPoints.length > 1) {
+      elements.push(
+        this.buildPath(pixelClosedPoints, roughGenerator, this.options.lineColor, {
+          dotted: true,
+        })
       )
     }
 
@@ -143,9 +168,21 @@ export class SVGChartGenerator {
         pixelPoints,
         roughGenerator,
         this.options.lineColor,
-        `${repoFullName}`
+        `${repoFullName}`,
+        "Created"
       )
     )
+    if (showClosed) {
+      elements.push(
+        this.buildDataPoints(
+          pixelClosedPoints,
+          roughGenerator,
+          this.options.lineColor,
+          `${repoFullName}`,
+          "Closed"
+        )
+      )
+    }
     elements.push(this.buildStyles())
 
     return this.wrapSvg(elements.join("\n"))
@@ -156,6 +193,7 @@ export class SVGChartGenerator {
     const visibleSeries = series.filter((entry) => entry.dataPoints.length > 0)
     const logScale = this.options.logScale
     const alignTimelines = this.options.alignTimelines
+    const showClosed = this.options.showClosed
 
     if (visibleSeries.length === 0) {
       return this.buildEmptyChart(title, chartArea)
@@ -167,7 +205,14 @@ export class SVGChartGenerator {
       ? this.normalizeSeriesToElapsedTime(seriesWithColors)
       : { series: seriesWithColors, maxElapsedMs: null as number | null }
     const activeSeries = normalized.series
-    const allPoints = activeSeries.flatMap((entry) => entry.dataPoints)
+    const allPoints = activeSeries.flatMap((entry) =>
+      showClosed
+        ? entry.dataPoints.flatMap((point) => [
+            point,
+            { ...point, count: point.closedCount },
+          ])
+        : entry.dataPoints
+    )
     const sortedAllPoints = [...allPoints].sort(
       (a, b) => a.date.getTime() - b.date.getTime()
     )
@@ -197,12 +242,21 @@ export class SVGChartGenerator {
       elements.push(this.buildXAxisWithRange(chartArea, minDate, maxDate, dateLabels))
     }
     elements.push(this.buildLegend(activeSeries, chartArea, roughGenerator))
+    if (showClosed) {
+      elements.push(this.buildLineStyleLegend(chartArea, roughGenerator))
+    }
 
     for (const entry of activeSeries) {
       const sortedPoints = [...entry.dataPoints].sort(
         (a, b) => a.date.getTime() - b.date.getTime()
       )
       const displayPoints = this.decimatePoints(sortedPoints)
+      const closedPoints = showClosed
+        ? displayPoints.map((point) => ({
+            ...point,
+            count: point.closedCount,
+          }))
+        : []
       const pixelPoints = this.mapDataToPixels(displayPoints, chartArea, {
         minDate,
         maxDate,
@@ -213,6 +267,18 @@ export class SVGChartGenerator {
           ? (date) => this.formatElapsedMonths(date.getTime())
           : undefined,
       })
+      const pixelClosedPoints = showClosed
+        ? this.mapDataToPixels(closedPoints, chartArea, {
+            minDate,
+            maxDate,
+            minCount,
+            maxCount,
+            logScale,
+            formatDate: alignTimelines
+              ? (date) => this.formatElapsedMonths(date.getTime())
+              : undefined,
+          })
+        : []
 
       if (pixelPoints.length > 1) {
         elements.push(
@@ -224,14 +290,37 @@ export class SVGChartGenerator {
         )
       }
 
+      if (showClosed && pixelClosedPoints.length > 1) {
+        elements.push(
+          this.buildPath(
+            pixelClosedPoints,
+            roughGenerator,
+            entry.color ?? this.options.lineColor,
+            { dotted: true }
+          )
+        )
+      }
+
       elements.push(
         this.buildDataPoints(
           pixelPoints,
           roughGenerator,
           entry.color ?? this.options.lineColor,
-          entry.repoFullName
+          entry.repoFullName,
+          "Created"
         )
       )
+      if (showClosed) {
+        elements.push(
+          this.buildDataPoints(
+            pixelClosedPoints,
+            roughGenerator,
+            entry.color ?? this.options.lineColor,
+            entry.repoFullName,
+            "Closed"
+          )
+        )
+      }
     }
 
     elements.push(this.buildStyles())
@@ -570,6 +659,43 @@ export class SVGChartGenerator {
     return `<g class="legend">${items.join("\n")}</g>`
   }
 
+  private buildLineStyleLegend(chartArea: ChartArea, roughGenerator: RoughGenerator): string {
+    const x = chartArea.right - 150
+    const y = chartArea.top - 12
+    const rowHeight = 18
+    const lineLength = 26
+    const items: string[] = []
+    const labels = [
+      { label: "Created", dotted: false },
+      { label: "Closed", dotted: true },
+    ]
+
+    labels.forEach((entry, index) => {
+      const yOffset = y + index * rowHeight
+      const line = roughGenerator.line(x, yOffset, x + lineLength, yOffset, {
+        stroke: "#111111",
+        strokeWidth: 2,
+        roughness: ROUGHNESS.gridLine.roughness,
+        bowing: ROUGHNESS.gridLine.bowing,
+      })
+      items.push(
+        this.buildRoughPaths(
+          roughGenerator.toPaths(line),
+          entry.dotted
+            ? { "stroke-dasharray": "4 6", "stroke-linecap": "round" }
+            : {}
+        )
+      )
+      items.push(
+        `<text x="${x + lineLength + 8}" y="${yOffset + 4}" class="chart-text">${this.escapeXml(
+          entry.label
+        )}</text>`
+      )
+    })
+
+    return `<g class="legend legend-line-style">${items.join("\n")}</g>`
+  }
+
   private assignSeriesColors(series: ChartSeries[]): ChartSeries[] {
     return series.map((entry, index) => ({
       ...entry,
@@ -675,7 +801,8 @@ export class SVGChartGenerator {
   private buildPath(
     pixelPoints: PixelPoint[],
     roughGenerator: RoughGenerator,
-    lineColor: string
+    lineColor: string,
+    options: { dotted?: boolean } = {}
   ): string {
     if (pixelPoints.length < 2) {
       return ""
@@ -691,7 +818,13 @@ export class SVGChartGenerator {
     })
 
     return `<g class="chart-line">${this.buildRoughPaths(
-      roughGenerator.toPaths(roughLine)
+      roughGenerator.toPaths(roughLine),
+      options.dotted
+        ? {
+            "stroke-dasharray": "4 6",
+            "stroke-linecap": "round",
+          }
+        : {}
     )}</g>`
   }
 
@@ -699,10 +832,12 @@ export class SVGChartGenerator {
     pixelPoints: PixelPoint[],
     roughGenerator: RoughGenerator,
     color: string,
-    repoFullName: string
+    repoFullName: string,
+    seriesLabel: string
   ): string {
     const circles: string[] = []
     const safeRepo = this.escapeXml(repoFullName)
+    const safeSeries = this.escapeXml(seriesLabel)
 
     for (const point of pixelPoints) {
       const roughCircle = roughGenerator.circle(
@@ -724,6 +859,7 @@ export class SVGChartGenerator {
           "data-date": point.date,
           "data-count": String(point.count),
           "data-repo": safeRepo,
+          "data-series": safeSeries,
         })
       )
     }
@@ -932,6 +1068,7 @@ ${content}
         return {
           date: new Date(elapsedMs),
           count: point.count,
+          closedCount: point.closedCount,
         }
       })
 

@@ -25,6 +25,7 @@ export const issueSnapshots = pgTable(
       .references(() => repositories.id, { onDelete: "cascade" }),
     snapshotDate: date("snapshot_date").notNull(),
     issueCount: integer("issue_count").notNull(),
+    closedIssueCount: integer("closed_issue_count").notNull().default(0),
   },
   (table) => [
     unique("issue_snapshots_repository_date_unique").on(table.repositoryId, table.snapshotDate),

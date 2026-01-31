@@ -12,10 +12,10 @@ function createErrorSvg(message: string): string {
   <rect width="900" height="600" fill="#ffffff" rx="8" ry="8" stroke="#e5e7eb" stroke-width="1"/>
   <text x="450" y="290" text-anchor="middle" fill="#dc2626" font-size="16" font-weight="600" font-family="system-ui, sans-serif">Error</text>
   <text x="450" y="320" text-anchor="middle" fill="#374151" font-size="14" font-family="system-ui, sans-serif">${escapedMessage}</text>
-</svg>`
+ </svg>`
 }
 
-export const Route = createFileRoute("/api/chart/$owner/$repo")({
+export const Route = createFileRoute("/api/svg/$owner/$repo")({
   server: {
     handlers: {
       GET: async ({ params, request }) => {

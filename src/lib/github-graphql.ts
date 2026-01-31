@@ -1,5 +1,5 @@
 const GITHUB_GRAPHQL_ENDPOINT = "https://api.github.com/graphql";
-const MAX_DATES_PER_BATCH = 25;
+const MAX_DATES_PER_BATCH = 12;
 let githubRequestCount = 0;
 
 interface RepositoryInfo {
@@ -37,6 +37,11 @@ interface SearchCountResponse {
   issueCount: number;
 }
 
+interface IssueCounts {
+  openCount: number;
+  closedCount: number;
+}
+
 type IssueCountsQueryResponse = Record<string, SearchCountResponse>;
 
 class GitHubGraphQLClient {
@@ -64,7 +69,11 @@ class GitHubGraphQLClient {
     };
   }
 
-  async getIssueCountsAtDates(owner: string, name: string, dates: Date[]): Promise<Map<string, number>> {
+  async getIssueCountsAtDates(
+    owner: string,
+    name: string,
+    dates: Date[]
+  ): Promise<Map<string, IssueCounts>> {
     if (dates.length === 0) {
       return new Map();
     }
@@ -80,15 +89,21 @@ class GitHubGraphQLClient {
       throw new Error("Failed to fetch issue counts");
     }
 
-    const results = new Map<string, number>();
+    const results = new Map<string, IssueCounts>();
 
     for (const date of dates) {
       const isoDate = formatDateToISO(date);
       const alias = dateToAlias(isoDate);
-      const searchResult = response.data[alias];
+      const openAlias = `open_${alias}`;
+      const closedAlias = `closed_${alias}`;
+      const openResult = response.data[openAlias];
+      const closedResult = response.data[closedAlias];
 
-      if (searchResult !== undefined) {
-        results.set(isoDate, searchResult.issueCount);
+      if (openResult !== undefined) {
+        results.set(isoDate, {
+          openCount: openResult.issueCount,
+          closedCount: closedResult?.issueCount ?? 0,
+        });
       }
     }
 
@@ -155,15 +170,23 @@ function buildRepositoryInfoQuery(owner: string, name: string): string {
   `;
 }
 
-function buildIssueCountsQuery(owner: string, name: string, dates: Date[]): string {
+function buildIssueCountsQuery(
+  owner: string,
+  name: string,
+  dates: Date[]
+): string {
   const searchQueries = dates.map(date => {
     const isoDate = formatDateToISO(date);
     const alias = dateToAlias(isoDate);
-    const searchQuery = `repo:${escapeGraphQLString(owner)}/${escapeGraphQLString(name)} is:issue created:<${isoDate}`;
+    const repoFragment = `repo:${escapeGraphQLString(owner)}/${escapeGraphQLString(name)}`;
+    const openQuery = `${repoFragment} is:issue created:<${isoDate}`;
+    const closedQuery = `${repoFragment} is:issue is:closed closed:<${isoDate}`;
+    const queries = [
+      `open_${alias}: search(query: "${escapeGraphQLString(openQuery)}", type: ISSUE, first: 0) { issueCount }`,
+      `closed_${alias}: search(query: "${escapeGraphQLString(closedQuery)}", type: ISSUE, first: 0) { issueCount }`,
+    ];
 
-    return `${alias}: search(query: "${escapeGraphQLString(searchQuery)}", type: ISSUE, first: 0) {
-      issueCount
-    }`;
+    return queries.join("\n      ");
   });
 
   return `

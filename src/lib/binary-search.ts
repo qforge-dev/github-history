@@ -1,6 +1,14 @@
+const MAX_DATES_PER_BATCH = 12
+
 interface DataPoint {
   date: Date
   count: number
+  closedCount: number
+}
+
+interface IssueCounts {
+  openCount: number
+  closedCount: number
 }
 
 interface BinarySearchConfig {
@@ -11,19 +19,19 @@ interface BinarySearchConfig {
 
 interface Segment {
   startDate: Date
-  startCount: number
+  startCounts: IssueCounts
   endDate: Date
-  endCount: number
+  endCounts: IssueCounts
 }
 
 export class AdaptiveResolutionFetcher {
   constructor(
     private config: BinarySearchConfig,
-    private fetchCounts: (dates: Date[]) => Promise<Map<string, number>>
+    private fetchCounts: (dates: Date[]) => Promise<Map<string, IssueCounts>>
   ) {}
 
   async discover(repoCreatedAt: Date, endDate: Date): Promise<DataPoint[]> {
-    const knownPoints = new Map<string, number>()
+    const knownPoints = new Map<string, IssueCounts>()
 
     const initialDates = [repoCreatedAt, endDate]
     const initialCounts = await this.fetchCounts(initialDates)
@@ -32,19 +40,19 @@ export class AdaptiveResolutionFetcher {
       knownPoints.set(dateKey, count)
     }
 
-    const startCount = initialCounts.get(this.dateToKey(repoCreatedAt))
-    const endCount = initialCounts.get(this.dateToKey(endDate))
+    const startCounts = initialCounts.get(this.dateToKey(repoCreatedAt))
+    const endCounts = initialCounts.get(this.dateToKey(endDate))
 
-    if (startCount === undefined || endCount === undefined) {
+    if (!startCounts || !endCounts) {
       return this.mapToDataPoints(knownPoints)
     }
 
     let queue: Segment[] = [
       {
         startDate: repoCreatedAt,
-        startCount,
+        startCounts,
         endDate,
-        endCount,
+        endCounts,
       },
     ]
 
@@ -58,7 +66,7 @@ export class AdaptiveResolutionFetcher {
       const midDates = this.collectMidDates(segmentsToSubdivide, knownPoints)
 
       if (midDates.length > 0) {
-        const batches = this.batchDates(midDates, 25)
+        const batches = this.batchDates(midDates, MAX_DATES_PER_BATCH)
 
         for (const batch of batches) {
           const counts = await this.fetchCounts(batch)
@@ -85,12 +93,16 @@ export class AdaptiveResolutionFetcher {
       return false
     }
 
-    const countDiff = Math.abs(segment.endCount - segment.startCount)
+    const openDiff = Math.abs(segment.endCounts.openCount - segment.startCounts.openCount)
+    const closedDiff = Math.abs(
+      segment.endCounts.closedCount - segment.startCounts.closedCount
+    )
+    const countDiff = Math.max(openDiff, closedDiff)
 
     return countDiff > this.config.threshold || daysDiff > this.config.maxIntervalDays
   }
 
-  private collectMidDates(segments: Segment[], knownPoints: Map<string, number>): Date[] {
+  private collectMidDates(segments: Segment[], knownPoints: Map<string, IssueCounts>): Date[] {
     const midDates: Date[] = []
     const seenKeys = new Set<string>()
 
@@ -107,30 +119,30 @@ export class AdaptiveResolutionFetcher {
     return midDates
   }
 
-  private createNewSegments(segments: Segment[], knownPoints: Map<string, number>): Segment[] {
+  private createNewSegments(segments: Segment[], knownPoints: Map<string, IssueCounts>): Segment[] {
     const newSegments: Segment[] = []
 
     for (const segment of segments) {
       const midDate = this.calculateMidDate(segment.startDate, segment.endDate)
       const midKey = this.dateToKey(midDate)
-      const midCount = knownPoints.get(midKey)
+      const midCounts = knownPoints.get(midKey)
 
-      if (midCount === undefined) {
+      if (!midCounts) {
         continue
       }
 
       newSegments.push({
         startDate: segment.startDate,
-        startCount: segment.startCount,
+        startCounts: segment.startCounts,
         endDate: midDate,
-        endCount: midCount,
+        endCounts: midCounts,
       })
 
       newSegments.push({
         startDate: midDate,
-        startCount: midCount,
+        startCounts: midCounts,
         endDate: segment.endDate,
-        endCount: segment.endCount,
+        endCounts: segment.endCounts,
       })
     }
 
@@ -167,13 +179,14 @@ export class AdaptiveResolutionFetcher {
     return batches
   }
 
-  private mapToDataPoints(knownPoints: Map<string, number>): DataPoint[] {
+  private mapToDataPoints(knownPoints: Map<string, IssueCounts>): DataPoint[] {
     const dataPoints: DataPoint[] = []
 
-    for (const [dateKey, count] of knownPoints) {
+    for (const [dateKey, counts] of knownPoints) {
       dataPoints.push({
         date: new Date(dateKey),
-        count,
+        count: counts.openCount,
+        closedCount: counts.closedCount,
       })
     }
 

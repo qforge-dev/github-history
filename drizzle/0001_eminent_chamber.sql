@@ -1,0 +1,1 @@
+ALTER TABLE "issue_snapshots" ADD COLUMN "closed_issue_count" integer DEFAULT 0 NOT NULL;

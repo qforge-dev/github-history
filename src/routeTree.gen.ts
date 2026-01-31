@@ -11,8 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SplatRouteImport } from './routes/$'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiSvgRouteImport } from './routes/api/svg'
 import { Route as ApiChartRouteImport } from './routes/api/chart'
 import { Route as OwnerRepoRouteImport } from './routes/$owner.$repo'
+import { Route as ApiSvgOwnerRepoRouteImport } from './routes/api/svg.$owner.$repo'
 import { Route as ApiChartOwnerRepoRouteImport } from './routes/api/chart.$owner.$repo'
 
 const SplatRoute = SplatRouteImport.update({
@@ -25,6 +27,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSvgRoute = ApiSvgRouteImport.update({
+  id: '/api/svg',
+  path: '/api/svg',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiChartRoute = ApiChartRouteImport.update({
   id: '/api/chart',
   path: '/api/chart',
@@ -34,6 +41,11 @@ const OwnerRepoRoute = OwnerRepoRouteImport.update({
   id: '/$owner/$repo',
   path: '/$owner/$repo',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSvgOwnerRepoRoute = ApiSvgOwnerRepoRouteImport.update({
+  id: '/$owner/$repo',
+  path: '/$owner/$repo',
+  getParentRoute: () => ApiSvgRoute,
 } as any)
 const ApiChartOwnerRepoRoute = ApiChartOwnerRepoRouteImport.update({
   id: '/$owner/$repo',
@@ -46,14 +58,18 @@ export interface FileRoutesByFullPath {
   '/$': typeof SplatRoute
   '/$owner/$repo': typeof OwnerRepoRoute
   '/api/chart': typeof ApiChartRouteWithChildren
+  '/api/svg': typeof ApiSvgRouteWithChildren
   '/api/chart/$owner/$repo': typeof ApiChartOwnerRepoRoute
+  '/api/svg/$owner/$repo': typeof ApiSvgOwnerRepoRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
   '/$owner/$repo': typeof OwnerRepoRoute
   '/api/chart': typeof ApiChartRouteWithChildren
+  '/api/svg': typeof ApiSvgRouteWithChildren
   '/api/chart/$owner/$repo': typeof ApiChartOwnerRepoRoute
+  '/api/svg/$owner/$repo': typeof ApiSvgOwnerRepoRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -61,7 +77,9 @@ export interface FileRoutesById {
   '/$': typeof SplatRoute
   '/$owner/$repo': typeof OwnerRepoRoute
   '/api/chart': typeof ApiChartRouteWithChildren
+  '/api/svg': typeof ApiSvgRouteWithChildren
   '/api/chart/$owner/$repo': typeof ApiChartOwnerRepoRoute
+  '/api/svg/$owner/$repo': typeof ApiSvgOwnerRepoRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -70,16 +88,27 @@ export interface FileRouteTypes {
     | '/$'
     | '/$owner/$repo'
     | '/api/chart'
+    | '/api/svg'
     | '/api/chart/$owner/$repo'
+    | '/api/svg/$owner/$repo'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$' | '/$owner/$repo' | '/api/chart' | '/api/chart/$owner/$repo'
+  to:
+    | '/'
+    | '/$'
+    | '/$owner/$repo'
+    | '/api/chart'
+    | '/api/svg'
+    | '/api/chart/$owner/$repo'
+    | '/api/svg/$owner/$repo'
   id:
     | '__root__'
     | '/'
     | '/$'
     | '/$owner/$repo'
     | '/api/chart'
+    | '/api/svg'
     | '/api/chart/$owner/$repo'
+    | '/api/svg/$owner/$repo'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -87,6 +116,7 @@ export interface RootRouteChildren {
   SplatRoute: typeof SplatRoute
   OwnerRepoRoute: typeof OwnerRepoRoute
   ApiChartRoute: typeof ApiChartRouteWithChildren
+  ApiSvgRoute: typeof ApiSvgRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -105,6 +135,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/svg': {
+      id: '/api/svg'
+      path: '/api/svg'
+      fullPath: '/api/svg'
+      preLoaderRoute: typeof ApiSvgRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/chart': {
       id: '/api/chart'
       path: '/api/chart'
@@ -118,6 +155,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/$owner/$repo'
       preLoaderRoute: typeof OwnerRepoRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/api/svg/$owner/$repo': {
+      id: '/api/svg/$owner/$repo'
+      path: '/$owner/$repo'
+      fullPath: '/api/svg/$owner/$repo'
+      preLoaderRoute: typeof ApiSvgOwnerRepoRouteImport
+      parentRoute: typeof ApiSvgRoute
     }
     '/api/chart/$owner/$repo': {
       id: '/api/chart/$owner/$repo'
@@ -141,11 +185,23 @@ const ApiChartRouteWithChildren = ApiChartRoute._addFileChildren(
   ApiChartRouteChildren,
 )
 
+interface ApiSvgRouteChildren {
+  ApiSvgOwnerRepoRoute: typeof ApiSvgOwnerRepoRoute
+}
+
+const ApiSvgRouteChildren: ApiSvgRouteChildren = {
+  ApiSvgOwnerRepoRoute: ApiSvgOwnerRepoRoute,
+}
+
+const ApiSvgRouteWithChildren =
+  ApiSvgRoute._addFileChildren(ApiSvgRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
   OwnerRepoRoute: OwnerRepoRoute,
   ApiChartRoute: ApiChartRouteWithChildren,
+  ApiSvgRoute: ApiSvgRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

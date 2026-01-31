@@ -1,4 +1,4 @@
-import { eq, and, gte, lte, desc } from "drizzle-orm"
+import { eq, and, gte, lte, desc, sql } from "drizzle-orm"
 import { db } from "../db/client"
 import { repositories, issueSnapshots } from "../db/schema"
 import type { DataPoint } from "./binary-search"
@@ -73,9 +73,19 @@ export class IssueHistoryCache {
       repositoryId,
       snapshotDate: dateToDateString(dataPoint.date),
       issueCount: dataPoint.count,
+      closedIssueCount: dataPoint.closedCount,
     }))
 
-    await db.insert(issueSnapshots).values(values).onConflictDoNothing()
+    await db
+      .insert(issueSnapshots)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [issueSnapshots.repositoryId, issueSnapshots.snapshotDate],
+        set: {
+          issueCount: sql`excluded.issue_count`,
+          closedIssueCount: sql`excluded.closed_issue_count`,
+        },
+      })
 
     await db
       .update(repositories)
@@ -107,10 +117,15 @@ export class IssueHistoryCache {
   }
 }
 
-function snapshotToDataPoint(snapshot: { snapshotDate: string; issueCount: number }): DataPoint {
+function snapshotToDataPoint(snapshot: {
+  snapshotDate: string
+  issueCount: number
+  closedIssueCount: number
+}): DataPoint {
   return {
     date: new Date(snapshot.snapshotDate),
     count: snapshot.issueCount,
+    closedCount: snapshot.closedIssueCount,
   }
 }
 
