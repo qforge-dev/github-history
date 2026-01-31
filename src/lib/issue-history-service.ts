@@ -4,6 +4,7 @@ import type { DataPoint } from "./binary-search"
 import { IssueHistoryCache } from "./cache"
 import { SVGChartGenerator } from "./svg-chart"
 import type { ChartOptions } from "./svg-chart"
+import { RepositoryLock } from "./repository-lock"
 
 const CACHE_FRESHNESS_HOURS = 24
 
@@ -11,11 +12,13 @@ class IssueHistoryService {
   private github: GitHubGraphQLClient
   private cache: IssueHistoryCache
   private chartGenerator: SVGChartGenerator
+  private repositoryLock: RepositoryLock
 
   constructor() {
     this.github = new GitHubGraphQLClient()
     this.cache = new IssueHistoryCache()
     this.chartGenerator = new SVGChartGenerator()
+    this.repositoryLock = new RepositoryLock()
   }
 
   async getIssueHistorySVG(
@@ -47,39 +50,71 @@ class IssueHistoryService {
     const cachedRepository = await this.cache.getRepository(owner, repo)
 
     if (cachedRepository) {
-      return this.handleCachedRepositoryData(
-        owner,
-        repo,
-        cachedRepository.id,
-        cachedRepository.createdAt
+      const cachedSnapshots = await this.cache.getSnapshots(cachedRepository.id)
+      const latestSnapshot = this.findLatestSnapshot(cachedSnapshots)
+
+      if (latestSnapshot && this.isCacheFresh(latestSnapshot.date)) {
+        return cachedSnapshots
+      }
+
+      const lockAcquired = await this.repositoryLock.acquireLock(owner, repo)
+      if (!lockAcquired) {
+        if (cachedSnapshots.length > 0) {
+          return cachedSnapshots
+        }
+
+        throw new Error(
+          `Repository ${owner}/${repo} is currently being synced. Please try again shortly.`
+        )
+      }
+
+      try {
+        const startDate = latestSnapshot ? latestSnapshot.date : cachedRepository.createdAt
+        const endDate = this.createTodayDate()
+
+        const newDataPoints = await this.fetchDataPoints(owner, repo, startDate, endDate)
+        const allDataPoints = this.mergeDataPoints(cachedSnapshots, newDataPoints)
+
+        await this.cache.saveSnapshots(cachedRepository.id, newDataPoints)
+
+        return allDataPoints
+      } finally {
+        await this.repositoryLock.releaseLock(owner, repo)
+      }
+    }
+
+    const lockAcquired = await this.repositoryLock.acquireLock(owner, repo)
+    if (!lockAcquired) {
+      throw new Error(
+        `Repository ${owner}/${repo} is currently being synced. Please try again shortly.`
       )
     }
 
-    return this.handleNewRepositoryData(owner, repo)
-  }
+    try {
+      const lockedRepository = await this.cache.getRepository(owner, repo)
+      if (lockedRepository) {
+        const cachedSnapshots = await this.cache.getSnapshots(lockedRepository.id)
+        const latestSnapshot = this.findLatestSnapshot(cachedSnapshots)
 
-  private async handleCachedRepositoryData(
-    owner: string,
-    repo: string,
-    repositoryId: number,
-    repoCreatedAt: Date
-  ): Promise<DataPoint[]> {
-    const cachedSnapshots = await this.cache.getSnapshots(repositoryId)
-    const latestSnapshot = this.findLatestSnapshot(cachedSnapshots)
+        if (latestSnapshot && this.isCacheFresh(latestSnapshot.date)) {
+          return cachedSnapshots
+        }
 
-    if (latestSnapshot && this.isCacheFresh(latestSnapshot.date)) {
-      return cachedSnapshots
+        const startDate = latestSnapshot ? latestSnapshot.date : lockedRepository.createdAt
+        const endDate = this.createTodayDate()
+
+        const newDataPoints = await this.fetchDataPoints(owner, repo, startDate, endDate)
+        const allDataPoints = this.mergeDataPoints(cachedSnapshots, newDataPoints)
+
+        await this.cache.saveSnapshots(lockedRepository.id, newDataPoints)
+
+        return allDataPoints
+      }
+
+      return await this.handleNewRepositoryData(owner, repo)
+    } finally {
+      await this.repositoryLock.releaseLock(owner, repo)
     }
-
-    const startDate = latestSnapshot ? latestSnapshot.date : repoCreatedAt
-    const endDate = this.createTodayDate()
-
-    const newDataPoints = await this.fetchDataPoints(owner, repo, startDate, endDate)
-    const allDataPoints = this.mergeDataPoints(cachedSnapshots, newDataPoints)
-
-    await this.cache.saveSnapshots(repositoryId, newDataPoints)
-
-    return allDataPoints
   }
 
   private async handleNewRepositoryData(owner: string, repo: string): Promise<DataPoint[]> {

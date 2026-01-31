@@ -33,3 +33,22 @@ export const issueSnapshots = pgTable(
     index("issue_snapshots_snapshot_date_idx").on(table.snapshotDate),
   ]
 );
+
+export const repositoryLocks = pgTable(
+  "repository_locks",
+  {
+    id: serial("id").primaryKey(),
+    owner: varchar("owner", { length: 255 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    lockedAt: timestamp("locked_at", { withTimezone: true }).notNull().defaultNow(),
+    lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lockHolderId: varchar("lock_holder_id", { length: 255 }).notNull(),
+  },
+  (table) => [
+    unique("repository_locks_owner_name_unique").on(table.owner, table.name),
+    index("repository_locks_expires_at_idx").on(table.expiresAt),
+  ]
+);

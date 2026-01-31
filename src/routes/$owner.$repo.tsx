@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { RepoComparisonPage } from "./$"
+import { RepoHistoryPage } from "./index"
 
 export const Route = createFileRoute("/$owner/$repo")({
-  component: RepoComparisonPage,
+  component: RepoHistoryPage,
 })

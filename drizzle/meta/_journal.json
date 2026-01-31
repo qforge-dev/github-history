@@ -15,6 +15,13 @@
       "when": 1769881494252,
       "tag": "0001_eminent_chamber",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1769888034460,
+      "tag": "0002_sudden_sir_ram",
+      "breakpoints": true
     }
   ]
 }
