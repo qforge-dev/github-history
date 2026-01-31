@@ -50,7 +50,7 @@ const DEFAULT_OPTIONS: ChartOptions = {
   padding: 60,
   lineColor: "#22c55e",
   backgroundColor: "#ffffff",
-  gridColor: "#e5e7eb",
+  gridColor: "#111111",
   textColor: "#374151",
   pointRadius: 4,
   targetPointCount: 15,
@@ -63,8 +63,8 @@ const SERIES_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"]
 const VIRGIL_FONT_PATH = resolve(process.cwd(), "public", "fonts", "Virgil.woff2")
 
 const ROUGHNESS = {
-  chartLine: { roughness: 1.5, bowing: 1.5, strokeWidth: 2.2 },
-  gridLine: { roughness: 0.6, bowing: 0.4, strokeWidth: 1 },
+  chartLine: { roughness: 1.5, bowing: 1.5, strokeWidth: 3 },
+  gridLine: { roughness: 0.6, bowing: 0.4, strokeWidth: 2 },
   frame: { roughness: 1.0, bowing: 1.0, strokeWidth: 1.2 },
   point: { roughness: 1.2, bowing: 1.0, strokeWidth: 1.4 },
 }
@@ -127,6 +127,7 @@ export class SVGChartGenerator {
     elements.push(this.buildDefs())
     elements.push(this.buildBackground())
     elements.push(this.buildTitle(`${repoFullName} - Issue History`))
+    elements.push(this.buildFooter())
     elements.push(this.buildAxisLines(chartArea, roughGenerator))
     elements.push(this.buildYAxis(chartArea, yScale, logScale))
     elements.push(this.buildXAxis(chartArea, sortedPoints, dateLabels))
@@ -186,6 +187,7 @@ export class SVGChartGenerator {
     elements.push(this.buildDefs())
     elements.push(this.buildBackground())
     elements.push(this.buildTitle(title))
+    elements.push(this.buildFooter())
     elements.push(this.buildAxisLines(chartArea, roughGenerator))
     elements.push(this.buildYAxis(chartArea, yScale, logScale))
     if (alignTimelines) {
@@ -194,7 +196,7 @@ export class SVGChartGenerator {
     } else {
       elements.push(this.buildXAxisWithRange(chartArea, minDate, maxDate, dateLabels))
     }
-    elements.push(this.buildLegend(activeSeries, chartArea))
+    elements.push(this.buildLegend(activeSeries, chartArea, roughGenerator))
 
     for (const entry of activeSeries) {
       const sortedPoints = [...entry.dataPoints].sort(
@@ -254,6 +256,7 @@ export class SVGChartGenerator {
     elements.push(this.buildDefs())
     elements.push(this.buildBackground())
     elements.push(this.buildTitle(title))
+    elements.push(this.buildFooter())
     elements.push(
       `<text x="${centerX}" y="${centerY}" text-anchor="middle" class="chart-text chart-empty">No data</text>`
     )
@@ -527,7 +530,18 @@ export class SVGChartGenerator {
     )}</text>`
   }
 
-  private buildLegend(series: ChartSeries[], chartArea: ChartArea): string {
+  private buildFooter(): string {
+    const x = this.options.width - this.options.padding
+    const y = this.options.height - this.options.padding + 36
+
+    return `<text x="${x}" y="${y}" text-anchor="end" class="chart-text chart-footer">github-history.com</text>`
+  }
+
+  private buildLegend(
+    series: ChartSeries[],
+    chartArea: ChartArea,
+    roughGenerator: RoughGenerator
+  ): string {
     const x = chartArea.left + 10
     let y = chartArea.top - 10
     const rowHeight = 18
@@ -537,9 +551,15 @@ export class SVGChartGenerator {
       const color = entry.color ?? this.options.lineColor
       const label = this.escapeXml(entry.repoFullName)
 
-      items.push(
-        `<rect x="${x}" y="${y}" width="10" height="10" fill="${color}" rx="2"/>`
-      )
+      const roughBox = roughGenerator.rectangle(x, y, 10, 10, {
+        stroke: "#111111",
+        strokeWidth: 1,
+        roughness: ROUGHNESS.gridLine.roughness,
+        bowing: ROUGHNESS.gridLine.bowing,
+        fill: color,
+        fillStyle: "solid",
+      })
+      items.push(this.buildRoughPaths(roughGenerator.toPaths(roughBox)))
       items.push(
         `<text x="${x + 16}" y="${y + 9}" class="chart-text">${label}</text>`
       )
@@ -622,8 +642,11 @@ export class SVGChartGenerator {
     const y = chartArea.bottom + 20
     const dateRange = maxDate - minDate
     const chartWidth = chartArea.right - chartArea.left
+    const minLabelSpacing = 80
+    let lastLabelX = Number.NEGATIVE_INFINITY
 
-    for (const date of dateLabels) {
+    for (let index = 0; index < dateLabels.length; index += 1) {
+      const date = dateLabels[index]
       let x: number
       if (dateRange === 0) {
         x = chartArea.left + chartWidth / 2
@@ -631,6 +654,13 @@ export class SVGChartGenerator {
         const ratio = (date.getTime() - minDate) / dateRange
         x = chartArea.left + ratio * chartWidth
       }
+
+      const isFirst = index === 0
+      const isLast = index === dateLabels.length - 1
+      if (!isFirst && !isLast && x - lastLabelX < minLabelSpacing) {
+        continue
+      }
+      lastLabelX = x
 
       labels.push(
         `<text x="${x}" y="${y}" text-anchor="middle" class="chart-text chart-axis chart-axis-x">${this.formatDate(
@@ -684,7 +714,7 @@ export class SVGChartGenerator {
           strokeWidth: ROUGHNESS.point.strokeWidth,
           roughness: ROUGHNESS.point.roughness,
           bowing: ROUGHNESS.point.bowing,
-          fill: this.options.backgroundColor,
+          fill: color,
           fillStyle: "solid",
         }
       )
@@ -723,12 +753,22 @@ export class SVGChartGenerator {
     }
     .chart-axis {
       font-size: 12px;
+      font-weight: 600;
+      fill: #111111;
     }
     .chart-axis-x {
       font-size: 11px;
+      font-weight: 600;
+    }
+    .legend .chart-text {
+      font-weight: 600;
     }
     .chart-empty {
       font-size: 16px;
+    }
+    .chart-footer {
+      font-size: 13px;
+      opacity: 0.9;
     }
     .data-point {
       cursor: pointer;
@@ -938,10 +978,20 @@ ${content}
     const labels: string[] = []
     const y = chartArea.bottom + 20
     const chartWidth = chartArea.right - chartArea.left
+    const minLabelSpacing = 80
+    let lastLabelX = Number.NEGATIVE_INFINITY
 
-    for (const months of monthValues) {
+    for (let index = 0; index < monthValues.length; index += 1) {
+      const months = monthValues[index]
       const ratio = maxMonths === 0 ? 0.5 : months / maxMonths
       const x = chartArea.left + ratio * chartWidth
+
+      const isFirst = index === 0
+      const isLast = index === monthValues.length - 1
+      if (!isFirst && !isLast && x - lastLabelX < minLabelSpacing) {
+        continue
+      }
+      lastLabelX = x
 
       labels.push(
         `<text x="${x}" y="${y}" text-anchor="middle" class="chart-text chart-axis chart-axis-x">${this.formatElapsedMonths(
