@@ -47,6 +47,64 @@ function buildPath(repos: RepoIdentifier[]): string {
   return repos.map((repo) => repo.fullName).join("&")
 }
 
+function parseBooleanParam(value: string | null): boolean {
+  return value === "true" || value === "1"
+}
+
+function normalizeSearchParams(search: unknown): URLSearchParams {
+  if (typeof search === "string") {
+    return new URLSearchParams(search)
+  }
+
+  if (!search || typeof search !== "object") {
+    return new URLSearchParams()
+  }
+
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(search as Record<string, unknown>)) {
+    if (value === null || value === undefined) continue
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === null || item === undefined) continue
+        params.append(key, String(item))
+      }
+    } else {
+      params.set(key, String(value))
+    }
+  }
+  return params
+}
+
+function applyChartParams(
+  params: URLSearchParams,
+  settings: {
+    logScale: boolean
+    alignTimelines: boolean
+    showClosed: boolean
+    allowAlign: boolean
+  }
+): URLSearchParams {
+  if (settings.logScale) {
+    params.set("logScale", "true")
+  } else {
+    params.delete("logScale")
+  }
+
+  if (settings.showClosed) {
+    params.set("showClosed", "true")
+  } else {
+    params.delete("showClosed")
+  }
+
+  if (settings.alignTimelines && settings.allowAlign) {
+    params.set("alignTimelines", "true")
+  } else {
+    params.delete("alignTimelines")
+  }
+
+  return params
+}
+
 function areReposEqual(a: RepoIdentifier[], b: RepoIdentifier[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i += 1) {
@@ -92,6 +150,16 @@ export function RepoHistoryPage() {
     return decodeURIComponent(cleaned)
   }, [location.pathname])
 
+  const searchParams = useMemo(() => normalizeSearchParams(location.search), [location.search])
+  const searchSettings = useMemo(
+    () => ({
+      logScale: parseBooleanParam(searchParams.get("logScale")),
+      alignTimelines: parseBooleanParam(searchParams.get("alignTimelines")),
+      showClosed: parseBooleanParam(searchParams.get("showClosed")),
+    }),
+    [searchParams]
+  )
+
   const parsedPath = useMemo(() => {
     if (!rawPath) {
       return { repos: [] as RepoIdentifier[] }
@@ -106,9 +174,9 @@ export function RepoHistoryPage() {
   const [svgContent, setSvgContent] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [logScale, setLogScale] = useState(false)
-  const [alignTimelines, setAlignTimelines] = useState(false)
-  const [showClosed, setShowClosed] = useState(false)
+  const [logScale, setLogScale] = useState(searchSettings.logScale)
+  const [alignTimelines, setAlignTimelines] = useState(searchSettings.alignTimelines)
+  const [showClosed, setShowClosed] = useState(searchSettings.showClosed)
   const [copiedAction, setCopiedAction] = useState<"svg" | "embed" | null>(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [tooltip, setTooltip] = useState<TooltipState>({
@@ -123,29 +191,36 @@ export function RepoHistoryPage() {
 
   const repoKey = useMemo(() => buildPath(repos), [repos])
   const chartPath = repoKey || parsedPath.normalizedPath || ""
+  const chartQuery = useMemo(() => {
+    const params = applyChartParams(new URLSearchParams(), {
+      logScale,
+      alignTimelines,
+      showClosed,
+      allowAlign: repos.length > 1,
+    })
+    const queryString = params.toString()
+    return queryString ? `?${queryString}` : ""
+  }, [alignTimelines, logScale, repos.length, showClosed])
+
   const chartUrl = useMemo(() => {
     if (!chartPath) {
       return "https://github-history.com/"
     }
 
     const safePath = encodeURI(chartPath)
-    return `https://github-history.com/${safePath}`
-  }, [chartPath])
+    return `https://github-history.com/${safePath}${chartQuery}`
+  }, [chartPath, chartQuery])
   const svgUrl = useMemo(() => {
     if (!repoKey) {
       return "https://github-history.com/api/svg"
     }
 
-    const params = new URLSearchParams({ repos: repoKey })
-    if (logScale) {
-      params.set("logScale", "true")
-    }
-    if (alignTimelines && repos.length > 1) {
-      params.set("alignTimelines", "true")
-    }
-    if (showClosed) {
-      params.set("showClosed", "true")
-    }
+    const params = applyChartParams(new URLSearchParams({ repos: repoKey }), {
+      logScale,
+      alignTimelines,
+      showClosed,
+      allowAlign: repos.length > 1,
+    })
 
     return `https://github-history.com/api/svg?${params.toString()}`
   }, [alignTimelines, logScale, repoKey, repos.length, showClosed])
@@ -168,6 +243,12 @@ export function RepoHistoryPage() {
   }, [navigate, parsedPath.normalizedPath, rawPath])
 
   useEffect(() => {
+    setLogScale(searchSettings.logScale)
+    setAlignTimelines(searchSettings.alignTimelines)
+    setShowClosed(searchSettings.showClosed)
+  }, [searchSettings.alignTimelines, searchSettings.logScale, searchSettings.showClosed])
+
+  useEffect(() => {
     if (!parsedPath.repos) {
       return
     }
@@ -183,6 +264,26 @@ export function RepoHistoryPage() {
 
     navigate({ to: nextPath ? `/${nextPath}` : "/", replace: true })
   }, [navigate, parsedPath.normalizedPath, rawPath, repos])
+
+  useEffect(() => {
+    const currentParams = normalizeSearchParams(location.search)
+    const nextParams = applyChartParams(new URLSearchParams(currentParams), {
+      logScale,
+      alignTimelines,
+      showClosed,
+      allowAlign: repos.length > 1,
+    })
+
+    const currentSearch = currentParams.toString()
+    const nextSearch = nextParams.toString()
+
+    if (currentSearch === nextSearch) {
+      return
+    }
+
+    const nextUrl = `${location.pathname}${nextSearch ? `?${nextSearch}` : ""}`
+    navigate({ to: nextUrl, replace: true })
+  }, [alignTimelines, location.pathname, location.search, logScale, navigate, repos.length, showClosed])
 
   useEffect(() => {
     if (repos.length < 2 && alignTimelines) {
@@ -211,16 +312,12 @@ export function RepoHistoryPage() {
       setSvgContent(null)
 
       try {
-        const params = new URLSearchParams({ repos: repoKey })
-        if (logScale) {
-          params.set("logScale", "true")
-        }
-        if (alignTimelines && repos.length > 1) {
-          params.set("alignTimelines", "true")
-        }
-        if (showClosed) {
-          params.set("showClosed", "true")
-        }
+        const params = applyChartParams(new URLSearchParams({ repos: repoKey }), {
+          logScale,
+          alignTimelines,
+          showClosed,
+          allowAlign: repos.length > 1,
+        })
 
         const response = await fetch(`/api/chart?${params.toString()}`)
         const text = await response.text()
