@@ -7,12 +7,15 @@ import type { ChartOptions } from "./svg-chart"
 import { RepositoryLock } from "./repository-lock"
 
 const CACHE_FRESHNESS_HOURS = 24
+const LOCK_WAIT_TIMEOUT_MS = 2 * 60 * 1000
+const LOCK_WAIT_INTERVAL_MS = 2000
 
 class IssueHistoryService {
   private github: GitHubGraphQLClient
   private cache: IssueHistoryCache
   private chartGenerator: SVGChartGenerator
   private repositoryLock: RepositoryLock
+  private inFlightRequests = new Map<string, Promise<DataPoint[]>>()
 
   constructor() {
     this.github = new GitHubGraphQLClient()
@@ -26,7 +29,11 @@ class IssueHistoryService {
     repo: string,
     options?: Partial<ChartOptions>
   ): Promise<string> {
-    const dataPoints = await this.getIssueHistoryDataPoints(owner, repo)
+    let dataPoints = await this.getIssueHistoryDataPoints(owner, repo)
+    const range = this.resolveDateRange(options?.startDate, options?.endDate)
+    if (range.startDate || range.endDate) {
+      dataPoints = this.filterByDateRange(dataPoints, range.startDate, range.endDate)
+    }
     const chartGenerator = options ? new SVGChartGenerator(options) : this.chartGenerator
     return chartGenerator.generate(dataPoints, `${owner}/${repo}`)
   }
@@ -35,9 +42,13 @@ class IssueHistoryService {
     repos: Array<{ owner: string; repo: string }>,
     options?: Partial<ChartOptions>
   ): Promise<string> {
+    const range = this.resolveDateRange(options?.startDate, options?.endDate)
     const series = await Promise.all(
       repos.map(async ({ owner, repo }) => {
-        const dataPoints = await this.getIssueHistoryDataPoints(owner, repo)
+        let dataPoints = await this.getIssueHistoryDataPoints(owner, repo)
+        if (range.startDate || range.endDate) {
+          dataPoints = this.filterByDateRange(dataPoints, range.startDate, range.endDate)
+        }
         return { repoFullName: `${owner}/${repo}`, dataPoints }
       })
     )
@@ -63,58 +74,58 @@ class IssueHistoryService {
           return cachedSnapshots
         }
 
-        throw new Error(
-          `Repository ${owner}/${repo} is currently being synced. Please try again shortly.`
-        )
+        return await this.waitForRepositoryData(owner, repo)
       }
 
-      try {
-        const startDate = latestSnapshot ? latestSnapshot.date : cachedRepository.createdAt
-        const endDate = this.createTodayDate()
+      return await this.withInFlight(owner, repo, async () => {
+        try {
+          const startDate = latestSnapshot ? latestSnapshot.date : cachedRepository.createdAt
+          const endDate = this.createTodayDate()
 
-        const newDataPoints = await this.fetchDataPoints(owner, repo, startDate, endDate)
-        const allDataPoints = this.mergeDataPoints(cachedSnapshots, newDataPoints)
+          const newDataPoints = await this.fetchDataPoints(owner, repo, startDate, endDate)
+          const allDataPoints = this.mergeDataPoints(cachedSnapshots, newDataPoints)
 
-        await this.cache.saveSnapshots(cachedRepository.id, newDataPoints)
+          await this.cache.saveSnapshots(cachedRepository.id, newDataPoints)
 
-        return allDataPoints
-      } finally {
-        await this.repositoryLock.releaseLock(owner, repo)
-      }
+          return allDataPoints
+        } finally {
+          await this.repositoryLock.releaseLock(owner, repo)
+        }
+      })
     }
 
     const lockAcquired = await this.repositoryLock.acquireLock(owner, repo)
     if (!lockAcquired) {
-      throw new Error(
-        `Repository ${owner}/${repo} is currently being synced. Please try again shortly.`
-      )
+      return await this.waitForRepositoryData(owner, repo)
     }
 
-    try {
-      const lockedRepository = await this.cache.getRepository(owner, repo)
-      if (lockedRepository) {
-        const cachedSnapshots = await this.cache.getSnapshots(lockedRepository.id)
-        const latestSnapshot = this.findLatestSnapshot(cachedSnapshots)
+    return await this.withInFlight(owner, repo, async () => {
+      try {
+        const lockedRepository = await this.cache.getRepository(owner, repo)
+        if (lockedRepository) {
+          const cachedSnapshots = await this.cache.getSnapshots(lockedRepository.id)
+          const latestSnapshot = this.findLatestSnapshot(cachedSnapshots)
 
-        if (latestSnapshot && this.isCacheFresh(latestSnapshot.date)) {
-          return cachedSnapshots
+          if (latestSnapshot && this.isCacheFresh(latestSnapshot.date)) {
+            return cachedSnapshots
+          }
+
+          const startDate = latestSnapshot ? latestSnapshot.date : lockedRepository.createdAt
+          const endDate = this.createTodayDate()
+
+          const newDataPoints = await this.fetchDataPoints(owner, repo, startDate, endDate)
+          const allDataPoints = this.mergeDataPoints(cachedSnapshots, newDataPoints)
+
+          await this.cache.saveSnapshots(lockedRepository.id, newDataPoints)
+
+          return allDataPoints
         }
 
-        const startDate = latestSnapshot ? latestSnapshot.date : lockedRepository.createdAt
-        const endDate = this.createTodayDate()
-
-        const newDataPoints = await this.fetchDataPoints(owner, repo, startDate, endDate)
-        const allDataPoints = this.mergeDataPoints(cachedSnapshots, newDataPoints)
-
-        await this.cache.saveSnapshots(lockedRepository.id, newDataPoints)
-
-        return allDataPoints
+        return await this.handleNewRepositoryData(owner, repo)
+      } finally {
+        await this.repositoryLock.releaseLock(owner, repo)
       }
-
-      return await this.handleNewRepositoryData(owner, repo)
-    } finally {
-      await this.repositoryLock.releaseLock(owner, repo)
-    }
+    })
   }
 
   private async handleNewRepositoryData(owner: string, repo: string): Promise<DataPoint[]> {
@@ -186,10 +197,93 @@ class IssueHistoryService {
     return date.toISOString().split("T")[0]
   }
 
+  private async waitForRepositoryData(owner: string, repo: string): Promise<DataPoint[]> {
+    const startTime = Date.now()
+    const key = this.repoKey(owner, repo)
+
+    while (Date.now() - startTime < LOCK_WAIT_TIMEOUT_MS) {
+      const inFlight = this.inFlightRequests.get(key)
+      if (inFlight) {
+        return inFlight
+      }
+
+      const cachedRepository = await this.cache.getRepository(owner, repo)
+      if (cachedRepository) {
+        const cachedSnapshots = await this.cache.getSnapshots(cachedRepository.id)
+        if (cachedSnapshots.length > 0) {
+          return cachedSnapshots
+        }
+      }
+
+      await this.sleep(LOCK_WAIT_INTERVAL_MS)
+    }
+
+    throw new Error(
+      `Repository ${owner}/${repo} is currently being synced. Please try again shortly.`
+    )
+  }
+
+  private async withInFlight(
+    owner: string,
+    repo: string,
+    runner: () => Promise<DataPoint[]>
+  ): Promise<DataPoint[]> {
+    const key = this.repoKey(owner, repo)
+    const existing = this.inFlightRequests.get(key)
+    if (existing) {
+      return existing
+    }
+
+    const promise = runner()
+    this.inFlightRequests.set(key, promise)
+
+    try {
+      return await promise
+    } finally {
+      if (this.inFlightRequests.get(key) === promise) {
+        this.inFlightRequests.delete(key)
+      }
+    }
+  }
+
+  private repoKey(owner: string, repo: string): string {
+    return `${owner}/${repo}`
+  }
+
+  private async sleep(durationMs: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, durationMs))
+  }
+
   private createTodayDate(): Date {
     const today = new Date()
     today.setUTCHours(0, 0, 0, 0)
     return today
+  }
+
+  private resolveDateRange(
+    startDate?: Date,
+    endDate?: Date
+  ): { startDate?: Date; endDate?: Date } {
+    const start = startDate && !Number.isNaN(startDate.getTime()) ? startDate : undefined
+    const end = endDate && !Number.isNaN(endDate.getTime()) ? endDate : undefined
+
+    if (start && end && start.getTime() > end.getTime()) {
+      return { startDate: end, endDate: start }
+    }
+
+    return { startDate: start, endDate: end }
+  }
+
+  private filterByDateRange(
+    points: DataPoint[],
+    startDate?: Date,
+    endDate?: Date
+  ): DataPoint[] {
+    return points.filter((point) => {
+      if (startDate && point.date.getTime() < startDate.getTime()) return false
+      if (endDate && point.date.getTime() > endDate.getTime()) return false
+      return true
+    })
   }
 }
 

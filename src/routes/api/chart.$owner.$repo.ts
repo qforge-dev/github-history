@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { issueHistoryService } from "@/lib/issue-history-service"
+import { parseMetricsParam } from "@/lib/metrics"
 
 function createErrorSvg(message: string): string {
   const escapedMessage = message
@@ -22,7 +23,7 @@ export const Route = createFileRoute("/api/chart/$owner/$repo")({
         const { owner, repo } = params
         const url = new URL(request.url)
         const logScale = url.searchParams.get("logScale") === "true"
-        const showClosed = url.searchParams.get("showClosed") === "true"
+        const metrics = parseMetricsParam(url.searchParams)
 
         if (!owner || !repo) {
           return new Response(createErrorSvg("Missing owner or repo parameter"), {
@@ -36,7 +37,7 @@ export const Route = createFileRoute("/api/chart/$owner/$repo")({
         try {
           const svg = await issueHistoryService.getIssueHistorySVG(owner, repo, {
             logScale,
-            showClosed,
+            metrics,
           })
 
           return new Response(svg, {

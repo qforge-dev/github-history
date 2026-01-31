@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { issueHistoryService } from "@/lib/issue-history-service"
 import { parseRepoPath } from "@/lib/repo-parser"
+import { parseMetricsParam } from "@/lib/metrics"
 
 function createErrorSvg(message: string): string {
   const escapedMessage = message
@@ -47,7 +48,12 @@ function extractReposParam(url: URL): string | null {
       continue
     }
 
-    if (part.startsWith("logScale=") || part.startsWith("alignTimelines=")) {
+    if (
+      part.startsWith("logScale=") ||
+      part.startsWith("alignTimelines=") ||
+      part.startsWith("metrics=") ||
+      part.startsWith("showClosed=")
+    ) {
       break
     }
 
@@ -61,6 +67,20 @@ function extractReposParam(url: URL): string | null {
   return reposSegments.length > 0 ? reposSegments.join("&") : direct
 }
 
+function parseDateParam(value: string | null): Date | undefined {
+  if (!value) return undefined
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return undefined
+  return parsed
+}
+
+function parseMonthParam(value: string | null): number | undefined {
+  if (!value) return undefined
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed)) return undefined
+  return Math.max(0, parsed)
+}
+
 export const Route = createFileRoute("/api/chart")({
   server: {
     handlers: {
@@ -69,7 +89,11 @@ export const Route = createFileRoute("/api/chart")({
         const reposParam = extractReposParam(url)
         const logScale = url.searchParams.get("logScale") === "true"
         const alignTimelines = url.searchParams.get("alignTimelines") === "true"
-        const showClosed = url.searchParams.get("showClosed") === "true"
+        const metrics = parseMetricsParam(url.searchParams)
+        const startDate = parseDateParam(url.searchParams.get("startDate"))
+        const endDate = parseDateParam(url.searchParams.get("endDate"))
+        const monthStart = parseMonthParam(url.searchParams.get("monthStart"))
+        const monthEnd = parseMonthParam(url.searchParams.get("monthEnd"))
 
         if (!reposParam) {
           return new Response(createErrorSvg("Missing repos query parameter"), {
@@ -96,7 +120,11 @@ export const Route = createFileRoute("/api/chart")({
           const svg = await issueHistoryService.getMultiRepoIssueHistorySVG(repos, {
             logScale,
             alignTimelines,
-            showClosed,
+            metrics,
+            startDate,
+            endDate,
+            monthStart,
+            monthEnd,
           })
 
           return new Response(svg, {
