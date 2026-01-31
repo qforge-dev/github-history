@@ -9,6 +9,7 @@ interface ChartOptions {
   gridColor: string
   textColor: string
   pointRadius: number
+  targetPointCount: number
 }
 
 interface ChartArea {
@@ -41,13 +42,15 @@ const DEFAULT_OPTIONS: ChartOptions = {
   gridColor: "#e5e7eb",
   textColor: "#374151",
   pointRadius: 4,
+  targetPointCount: 15,
 }
 
 export class SVGChartGenerator {
   private options: ChartOptions
 
   constructor(options: Partial<ChartOptions> | null = null) {
-    this.options = { ...DEFAULT_OPTIONS, ...options }
+    const envOptions = this.loadEnvOptions()
+    this.options = { ...DEFAULT_OPTIONS, ...envOptions, ...options }
   }
 
   generate(dataPoints: DataPoint[], repoFullName: string): string {
@@ -60,10 +63,11 @@ export class SVGChartGenerator {
     const sortedPoints = [...dataPoints].sort(
       (a, b) => a.date.getTime() - b.date.getTime()
     )
+    const displayPoints = this.decimatePoints(sortedPoints)
 
-    const pixelPoints = this.mapDataToPixels(sortedPoints, chartArea)
-    const yScale = this.calculateYAxisScale(sortedPoints)
-    const dateLabels = this.selectDateLabels(sortedPoints)
+    const pixelPoints = this.mapDataToPixels(displayPoints, chartArea)
+    const yScale = this.calculateYAxisScale(displayPoints)
+    const dateLabels = this.selectDateLabels(displayPoints)
 
     const elements: string[] = []
 
@@ -74,7 +78,7 @@ export class SVGChartGenerator {
     elements.push(this.buildYAxis(chartArea, yScale))
     elements.push(this.buildXAxis(chartArea, sortedPoints, dateLabels))
 
-    if (sortedPoints.length > 1) {
+    if (displayPoints.length > 1) {
       elements.push(this.buildPath(pixelPoints))
     }
 
@@ -221,6 +225,64 @@ export class SVGChartGenerator {
     }
 
     return labels
+  }
+
+  private decimatePoints(dataPoints: DataPoint[]): DataPoint[] {
+    if (dataPoints.length <= 2) {
+      return dataPoints
+    }
+
+    const targetPointCount = Math.max(2, this.options.targetPointCount)
+
+    if (dataPoints.length <= targetPointCount) {
+      return dataPoints
+    }
+
+    if (targetPointCount === 2) {
+      return [dataPoints[0], dataPoints[dataPoints.length - 1]]
+    }
+
+    const sampled: DataPoint[] = []
+    const bucketSize = (dataPoints.length - 2) / (targetPointCount - 2)
+    let aIndex = 0
+
+    sampled.push(dataPoints[aIndex])
+
+    for (let i = 0; i < targetPointCount - 2; i++) {
+      const bucketStart = Math.floor(i * bucketSize) + 1
+      const bucketEnd = Math.floor((i + 1) * bucketSize) + 1
+      const avgStart = Math.floor((i + 1) * bucketSize) + 1
+      const avgEnd = Math.floor((i + 2) * bucketSize) + 1
+
+      const avgPoint = this.averagePoint(dataPoints, avgStart, avgEnd)
+      const pointA = dataPoints[aIndex]
+
+      let maxArea = -1
+      let maxIndex = bucketStart
+
+      const safeEnd = Math.min(bucketEnd, dataPoints.length - 1)
+      for (let j = bucketStart; j < safeEnd; j++) {
+        const point = dataPoints[j]
+        const area = Math.abs(
+          (pointA.date.getTime() - avgPoint.x) *
+            (point.count - avgPoint.y) -
+            (pointA.count - avgPoint.y) *
+              (point.date.getTime() - avgPoint.x)
+        )
+
+        if (area > maxArea) {
+          maxArea = area
+          maxIndex = j
+        }
+      }
+
+      sampled.push(dataPoints[maxIndex])
+      aIndex = maxIndex
+    }
+
+    sampled.push(dataPoints[dataPoints.length - 1])
+
+    return sampled
   }
 
   private buildDefs(): string {
@@ -400,5 +462,42 @@ ${content}
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&apos;")
+  }
+
+  private loadEnvOptions(): Partial<ChartOptions> {
+    const options: Partial<ChartOptions> = {}
+    const targetPointCount = Number(process.env.CHART_TARGET_POINTS)
+
+    if (Number.isFinite(targetPointCount) && targetPointCount >= 2) {
+      options.targetPointCount = Math.floor(targetPointCount)
+    }
+
+    return options
+  }
+
+  private averagePoint(
+    dataPoints: DataPoint[],
+    startIndex: number,
+    endIndex: number
+  ): { x: number; y: number } {
+    const start = Math.max(0, startIndex)
+    const end = Math.min(endIndex, dataPoints.length)
+
+    if (start >= end) {
+      const fallback = dataPoints[dataPoints.length - 1]
+      return { x: fallback.date.getTime(), y: fallback.count }
+    }
+
+    let sumX = 0
+    let sumY = 0
+    let count = 0
+
+    for (let i = start; i < end; i++) {
+      sumX += dataPoints[i].date.getTime()
+      sumY += dataPoints[i].count
+      count += 1
+    }
+
+    return { x: sumX / count, y: sumY / count }
   }
 }

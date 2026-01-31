@@ -37,7 +37,6 @@ export const Route = createFileRoute("/api/chart/$owner/$repo")({
             status: 200,
             headers: {
               "Content-Type": "image/svg+xml",
-              "Cache-Control": "public, max-age=3600",
             },
           })
         } catch (error) {
