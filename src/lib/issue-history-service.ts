@@ -18,26 +18,49 @@ class IssueHistoryService {
   }
 
   async getIssueHistorySVG(owner: string, repo: string): Promise<string> {
+    const dataPoints = await this.getIssueHistoryDataPoints(owner, repo)
+    return this.chartGenerator.generate(dataPoints, `${owner}/${repo}`)
+  }
+
+  async getMultiRepoIssueHistorySVG(
+    repos: Array<{ owner: string; repo: string }>
+  ): Promise<string> {
+    const series = await Promise.all(
+      repos.map(async ({ owner, repo }) => {
+        const dataPoints = await this.getIssueHistoryDataPoints(owner, repo)
+        return { repoFullName: `${owner}/${repo}`, dataPoints }
+      })
+    )
+
+    return this.chartGenerator.generateMultiSeries(series)
+  }
+
+  async getIssueHistoryDataPoints(owner: string, repo: string): Promise<DataPoint[]> {
     const cachedRepository = await this.cache.getRepository(owner, repo)
 
     if (cachedRepository) {
-      return this.handleCachedRepository(owner, repo, cachedRepository.id, cachedRepository.createdAt)
+      return this.handleCachedRepositoryData(
+        owner,
+        repo,
+        cachedRepository.id,
+        cachedRepository.createdAt
+      )
     }
 
-    return this.handleNewRepository(owner, repo)
+    return this.handleNewRepositoryData(owner, repo)
   }
 
-  private async handleCachedRepository(
+  private async handleCachedRepositoryData(
     owner: string,
     repo: string,
     repositoryId: number,
     repoCreatedAt: Date
-  ): Promise<string> {
+  ): Promise<DataPoint[]> {
     const cachedSnapshots = await this.cache.getSnapshots(repositoryId)
     const latestSnapshot = this.findLatestSnapshot(cachedSnapshots)
 
     if (latestSnapshot && this.isCacheFresh(latestSnapshot.date)) {
-      return this.chartGenerator.generate(cachedSnapshots, `${owner}/${repo}`)
+      return cachedSnapshots
     }
 
     const startDate = latestSnapshot ? latestSnapshot.date : repoCreatedAt
@@ -48,10 +71,10 @@ class IssueHistoryService {
 
     await this.cache.saveSnapshots(repositoryId, newDataPoints)
 
-    return this.chartGenerator.generate(allDataPoints, `${owner}/${repo}`)
+    return allDataPoints
   }
 
-  private async handleNewRepository(owner: string, repo: string): Promise<string> {
+  private async handleNewRepositoryData(owner: string, repo: string): Promise<DataPoint[]> {
     const repoInfo = await this.github.getRepositoryInfo(owner, repo)
     const repository = await this.cache.createRepository(owner, repo, repoInfo.createdAt)
 
@@ -62,7 +85,7 @@ class IssueHistoryService {
 
     await this.cache.saveSnapshots(repository.id, dataPoints)
 
-    return this.chartGenerator.generate(dataPoints, `${owner}/${repo}`)
+    return dataPoints
   }
 
   private async fetchDataPoints(

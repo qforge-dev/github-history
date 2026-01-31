@@ -26,6 +26,12 @@ interface PixelPoint {
   count: number
 }
 
+interface ChartSeries {
+  repoFullName: string
+  dataPoints: DataPoint[]
+  color?: string
+}
+
 interface AxisScale {
   min: number
   max: number
@@ -45,6 +51,8 @@ const DEFAULT_OPTIONS: ChartOptions = {
   targetPointCount: 15,
 }
 
+const SERIES_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"]
+
 export class SVGChartGenerator {
   private options: ChartOptions
 
@@ -57,7 +65,7 @@ export class SVGChartGenerator {
     const chartArea = this.calculateChartArea()
 
     if (dataPoints.length === 0) {
-      return this.buildEmptyChart(repoFullName, chartArea)
+      return this.buildEmptyChart(`${repoFullName} - Issue History`, chartArea)
     }
 
     const sortedPoints = [...dataPoints].sort(
@@ -73,16 +81,80 @@ export class SVGChartGenerator {
 
     elements.push(this.buildDefs())
     elements.push(this.buildBackground())
-    elements.push(this.buildTitle(repoFullName))
+    elements.push(this.buildTitle(`${repoFullName} - Issue History`))
     elements.push(this.buildGridLines(chartArea, yScale))
     elements.push(this.buildYAxis(chartArea, yScale))
     elements.push(this.buildXAxis(chartArea, sortedPoints, dateLabels))
 
     if (displayPoints.length > 1) {
-      elements.push(this.buildPath(pixelPoints))
+      elements.push(this.buildPath(pixelPoints, this.options.lineColor))
     }
 
-    elements.push(this.buildDataPoints(pixelPoints))
+    elements.push(
+      this.buildDataPoints(pixelPoints, this.options.lineColor, `${repoFullName}`)
+    )
+    elements.push(this.buildStyles())
+
+    return this.wrapSvg(elements.join("\n"))
+  }
+
+  generateMultiSeries(series: ChartSeries[], title = "Issue History Comparison"): string {
+    const chartArea = this.calculateChartArea()
+    const visibleSeries = series.filter((entry) => entry.dataPoints.length > 0)
+
+    if (visibleSeries.length === 0) {
+      return this.buildEmptyChart(title, chartArea)
+    }
+
+    const seriesWithColors = this.assignSeriesColors(visibleSeries)
+    const allPoints = seriesWithColors.flatMap((entry) => entry.dataPoints)
+    const sortedAllPoints = [...allPoints].sort(
+      (a, b) => a.date.getTime() - b.date.getTime()
+    )
+    const minDate = sortedAllPoints[0].date.getTime()
+    const maxDate = sortedAllPoints[sortedAllPoints.length - 1].date.getTime()
+    const counts = sortedAllPoints.map((point) => point.count)
+    const minCount = Math.min(...counts)
+    const maxCount = Math.max(...counts)
+
+    const yScale = this.calculateAxisScale(minCount, maxCount)
+    const dateLabels = this.selectDateLabels(sortedAllPoints)
+
+    const elements: string[] = []
+
+    elements.push(this.buildDefs())
+    elements.push(this.buildBackground())
+    elements.push(this.buildTitle(title))
+    elements.push(this.buildGridLines(chartArea, yScale))
+    elements.push(this.buildYAxis(chartArea, yScale))
+    elements.push(this.buildXAxisWithRange(chartArea, minDate, maxDate, dateLabels))
+    elements.push(this.buildLegend(seriesWithColors, chartArea))
+
+    for (const entry of seriesWithColors) {
+      const sortedPoints = [...entry.dataPoints].sort(
+        (a, b) => a.date.getTime() - b.date.getTime()
+      )
+      const displayPoints = this.decimatePoints(sortedPoints)
+      const pixelPoints = this.mapDataToPixels(displayPoints, chartArea, {
+        minDate,
+        maxDate,
+        minCount,
+        maxCount,
+      })
+
+      if (pixelPoints.length > 1) {
+        elements.push(this.buildPath(pixelPoints, entry.color ?? this.options.lineColor))
+      }
+
+      elements.push(
+        this.buildDataPoints(
+          pixelPoints,
+          entry.color ?? this.options.lineColor,
+          entry.repoFullName
+        )
+      )
+    }
+
     elements.push(this.buildStyles())
 
     return this.wrapSvg(elements.join("\n"))
@@ -97,14 +169,14 @@ export class SVGChartGenerator {
     }
   }
 
-  private buildEmptyChart(repoFullName: string, chartArea: ChartArea): string {
+  private buildEmptyChart(title: string, chartArea: ChartArea): string {
     const centerX = (chartArea.left + chartArea.right) / 2
     const centerY = (chartArea.top + chartArea.bottom) / 2
 
     const elements: string[] = []
     elements.push(this.buildDefs())
     elements.push(this.buildBackground())
-    elements.push(this.buildTitle(repoFullName))
+    elements.push(this.buildTitle(title))
     elements.push(
       `<text x="${centerX}" y="${centerY}" text-anchor="middle" fill="${this.options.textColor}" font-size="16" font-family="system-ui, sans-serif">No data</text>`
     )
@@ -113,18 +185,22 @@ export class SVGChartGenerator {
     return this.wrapSvg(elements.join("\n"))
   }
 
-  private mapDataToPixels(dataPoints: DataPoint[], chartArea: ChartArea): PixelPoint[] {
+  private mapDataToPixels(
+    dataPoints: DataPoint[],
+    chartArea: ChartArea,
+    scale?: { minDate: number; maxDate: number; minCount: number; maxCount: number }
+  ): PixelPoint[] {
     if (dataPoints.length === 0) {
       return []
     }
 
-    const minDate = dataPoints[0].date.getTime()
-    const maxDate = dataPoints[dataPoints.length - 1].date.getTime()
+    const minDate = scale ? scale.minDate : dataPoints[0].date.getTime()
+    const maxDate = scale ? scale.maxDate : dataPoints[dataPoints.length - 1].date.getTime()
     const dateRange = maxDate - minDate
 
     const counts = dataPoints.map((p) => p.count)
-    const minCount = Math.min(...counts)
-    const maxCount = Math.max(...counts)
+    const minCount = scale ? scale.minCount : Math.min(...counts)
+    const maxCount = scale ? scale.maxCount : Math.max(...counts)
     const countRange = maxCount - minCount
 
     const chartWidth = chartArea.right - chartArea.left
@@ -297,12 +373,41 @@ export class SVGChartGenerator {
     return `<rect width="${this.options.width}" height="${this.options.height}" fill="${this.options.backgroundColor}" rx="8" ry="8" stroke="${this.options.gridColor}" stroke-width="1"/>`
   }
 
-  private buildTitle(repoFullName: string): string {
+  private buildTitle(title: string): string {
     const x = this.options.width / 2
     const y = this.options.padding / 2 + 10
-    const title = `${repoFullName} - Issue History`
 
     return `<text x="${x}" y="${y}" text-anchor="middle" fill="${this.options.textColor}" font-size="16" font-weight="600" font-family="system-ui, sans-serif">${this.escapeXml(title)}</text>`
+  }
+
+  private buildLegend(series: ChartSeries[], chartArea: ChartArea): string {
+    const x = chartArea.left + 10
+    let y = chartArea.top - 10
+    const rowHeight = 18
+    const items: string[] = []
+
+    for (const entry of series) {
+      const color = entry.color ?? this.options.lineColor
+      const label = this.escapeXml(entry.repoFullName)
+
+      items.push(
+        `<rect x="${x}" y="${y}" width="10" height="10" fill="${color}" rx="2"/>`
+      )
+      items.push(
+        `<text x="${x + 16}" y="${y + 9}" fill="${this.options.textColor}" font-size="11" font-family="system-ui, sans-serif">${label}</text>`
+      )
+
+      y += rowHeight
+    }
+
+    return `<g class="legend">${items.join("\n")}</g>`
+  }
+
+  private assignSeriesColors(series: ChartSeries[]): ChartSeries[] {
+    return series.map((entry, index) => ({
+      ...entry,
+      color: entry.color ?? SERIES_COLORS[index % SERIES_COLORS.length],
+    }))
   }
 
   private buildGridLines(chartArea: ChartArea, yScale: AxisScale): string {
@@ -343,11 +448,19 @@ export class SVGChartGenerator {
     dataPoints: DataPoint[],
     dateLabels: Date[]
   ): string {
-    const labels: string[] = []
-    const y = chartArea.bottom + 20
-
     const minDate = dataPoints[0].date.getTime()
     const maxDate = dataPoints[dataPoints.length - 1].date.getTime()
+    return this.buildXAxisWithRange(chartArea, minDate, maxDate, dateLabels)
+  }
+
+  private buildXAxisWithRange(
+    chartArea: ChartArea,
+    minDate: number,
+    maxDate: number,
+    dateLabels: Date[]
+  ): string {
+    const labels: string[] = []
+    const y = chartArea.bottom + 20
     const dateRange = maxDate - minDate
     const chartWidth = chartArea.right - chartArea.left
 
@@ -368,14 +481,14 @@ export class SVGChartGenerator {
     return `<g class="x-axis">${labels.join("\n")}</g>`
   }
 
-  private buildPath(pixelPoints: PixelPoint[]): string {
+  private buildPath(pixelPoints: PixelPoint[], lineColor: string): string {
     if (pixelPoints.length < 2) {
       return ""
     }
 
     const d = this.buildPathD(pixelPoints)
 
-    return `<path d="${d}" fill="none" stroke="${this.options.lineColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`
+    return `<path d="${d}" fill="none" stroke="${lineColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`
   }
 
   private buildPathD(points: PixelPoint[]): string {
@@ -390,12 +503,17 @@ export class SVGChartGenerator {
     return parts.join(" ")
   }
 
-  private buildDataPoints(pixelPoints: PixelPoint[]): string {
+  private buildDataPoints(
+    pixelPoints: PixelPoint[],
+    color: string,
+    repoFullName: string
+  ): string {
     const circles: string[] = []
+    const safeRepo = this.escapeXml(repoFullName)
 
     for (const point of pixelPoints) {
       circles.push(
-        `<circle cx="${point.x}" cy="${point.y}" r="${this.options.pointRadius}" data-date="${point.date}" data-count="${point.count}" class="data-point"/>`
+        `<circle cx="${point.x}" cy="${point.y}" r="${this.options.pointRadius}" data-date="${point.date}" data-count="${point.count}" data-repo="${safeRepo}" class="data-point" fill="${color}"/>`
       )
     }
 
@@ -405,7 +523,6 @@ export class SVGChartGenerator {
   private buildStyles(): string {
     return `<style>
     .data-point { 
-      fill: ${this.options.lineColor}; 
       cursor: pointer;
       transition: r 0.15s ease;
     }

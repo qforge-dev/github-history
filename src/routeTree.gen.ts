@@ -9,13 +9,25 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SplatRouteImport } from './routes/$'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiChartRouteImport } from './routes/api/chart'
 import { Route as OwnerRepoRouteImport } from './routes/$owner.$repo'
 import { Route as ApiChartOwnerRepoRouteImport } from './routes/api/chart.$owner.$repo'
 
+const SplatRoute = SplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiChartRoute = ApiChartRouteImport.update({
+  id: '/api/chart',
+  path: '/api/chart',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OwnerRepoRoute = OwnerRepoRouteImport.update({
@@ -24,48 +36,80 @@ const OwnerRepoRoute = OwnerRepoRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiChartOwnerRepoRoute = ApiChartOwnerRepoRouteImport.update({
-  id: '/api/chart/$owner/$repo',
-  path: '/api/chart/$owner/$repo',
-  getParentRoute: () => rootRouteImport,
+  id: '/$owner/$repo',
+  path: '/$owner/$repo',
+  getParentRoute: () => ApiChartRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/$owner/$repo': typeof OwnerRepoRoute
+  '/api/chart': typeof ApiChartRouteWithChildren
   '/api/chart/$owner/$repo': typeof ApiChartOwnerRepoRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/$owner/$repo': typeof OwnerRepoRoute
+  '/api/chart': typeof ApiChartRouteWithChildren
   '/api/chart/$owner/$repo': typeof ApiChartOwnerRepoRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$': typeof SplatRoute
   '/$owner/$repo': typeof OwnerRepoRoute
+  '/api/chart': typeof ApiChartRouteWithChildren
   '/api/chart/$owner/$repo': typeof ApiChartOwnerRepoRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$owner/$repo' | '/api/chart/$owner/$repo'
+  fullPaths:
+    | '/'
+    | '/$'
+    | '/$owner/$repo'
+    | '/api/chart'
+    | '/api/chart/$owner/$repo'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$owner/$repo' | '/api/chart/$owner/$repo'
-  id: '__root__' | '/' | '/$owner/$repo' | '/api/chart/$owner/$repo'
+  to: '/' | '/$' | '/$owner/$repo' | '/api/chart' | '/api/chart/$owner/$repo'
+  id:
+    | '__root__'
+    | '/'
+    | '/$'
+    | '/$owner/$repo'
+    | '/api/chart'
+    | '/api/chart/$owner/$repo'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SplatRoute: typeof SplatRoute
   OwnerRepoRoute: typeof OwnerRepoRoute
-  ApiChartOwnerRepoRoute: typeof ApiChartOwnerRepoRoute
+  ApiChartRoute: typeof ApiChartRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/$': {
+      id: '/$'
+      path: '/$'
+      fullPath: '/$'
+      preLoaderRoute: typeof SplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/chart': {
+      id: '/api/chart'
+      path: '/api/chart'
+      fullPath: '/api/chart'
+      preLoaderRoute: typeof ApiChartRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$owner/$repo': {
@@ -77,18 +121,31 @@ declare module '@tanstack/react-router' {
     }
     '/api/chart/$owner/$repo': {
       id: '/api/chart/$owner/$repo'
-      path: '/api/chart/$owner/$repo'
+      path: '/$owner/$repo'
       fullPath: '/api/chart/$owner/$repo'
       preLoaderRoute: typeof ApiChartOwnerRepoRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ApiChartRoute
     }
   }
 }
 
+interface ApiChartRouteChildren {
+  ApiChartOwnerRepoRoute: typeof ApiChartOwnerRepoRoute
+}
+
+const ApiChartRouteChildren: ApiChartRouteChildren = {
+  ApiChartOwnerRepoRoute: ApiChartOwnerRepoRoute,
+}
+
+const ApiChartRouteWithChildren = ApiChartRoute._addFileChildren(
+  ApiChartRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SplatRoute: SplatRoute,
   OwnerRepoRoute: OwnerRepoRoute,
-  ApiChartOwnerRepoRoute: ApiChartOwnerRepoRoute,
+  ApiChartRoute: ApiChartRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

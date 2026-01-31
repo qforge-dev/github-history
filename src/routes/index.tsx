@@ -2,31 +2,24 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { normalizeRepoInputToPath, parseRepoPath } from "@/lib/repo-parser"
 
 export const Route = createFileRoute("/")({ component: HomePage })
 
-function parseRepoInput(input: string): { owner: string; repo: string } | null {
-  const trimmed = input.trim()
+function parseRepoInput(input: string): { path: string; error?: string } | null {
+  const path = normalizeRepoInputToPath(input)
 
-  if (!trimmed) {
+  if (!path) {
     return null
   }
 
-  const fullUrlPattern = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/?$/
-  const fullUrlMatch = trimmed.match(fullUrlPattern)
+  const { error, normalizedPath } = parseRepoPath(path, 5)
 
-  if (fullUrlMatch) {
-    return { owner: fullUrlMatch[1], repo: fullUrlMatch[2] }
+  if (error) {
+    return { path, error }
   }
 
-  const shortPattern = /^([^/]+)\/([^/]+)$/
-  const shortMatch = trimmed.match(shortPattern)
-
-  if (shortMatch) {
-    return { owner: shortMatch[1], repo: shortMatch[2] }
-  }
-
-  return null
+  return { path: normalizedPath ?? path }
 }
 
 function HomePage() {
@@ -41,11 +34,18 @@ function HomePage() {
     const parsed = parseRepoInput(repoInput)
 
     if (!parsed) {
-      setErrorMessage("Please enter a valid GitHub repository (e.g., facebook/react)")
+      setErrorMessage(
+        "Please enter a valid GitHub repository (e.g., facebook/react or owner/repo&owner2/repo2)"
+      )
       return
     }
 
-    navigate({ to: "/$owner/$repo", params: { owner: parsed.owner, repo: parsed.repo } })
+    if (parsed.error) {
+      setErrorMessage(parsed.error)
+      return
+    }
+
+    navigate({ to: `/${parsed.path}` })
   }
 
   function handleInputChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -73,7 +73,7 @@ function HomePage() {
                 type="text"
                 value={repoInput}
                 onChange={handleInputChange}
-                placeholder="facebook/react or https://github.com/facebook/react"
+                placeholder="facebook/react or https://www.star-history.com/owner/repo&owner2/repo2"
                 className="flex-1 bg-slate-800 border-slate-600 text-white placeholder:text-slate-400"
               />
               <Button type="submit" className="bg-cyan-500 hover:bg-cyan-600 text-white px-6">
@@ -81,15 +81,20 @@ function HomePage() {
               </Button>
             </div>
 
-            {errorMessage && (
-              <p className="text-red-400 text-sm text-left">{errorMessage}</p>
-            )}
+              {errorMessage && (
+                <p className="text-red-400 text-sm text-left">{errorMessage}</p>
+              )}
           </form>
 
           <div className="mt-8 text-gray-400 text-sm">
             <p>Examples:</p>
             <div className="flex flex-wrap justify-center gap-2 mt-2">
-              {["facebook/react", "microsoft/vscode", "vercel/next.js"].map((example) => (
+              {[
+                "facebook/react",
+                "microsoft/vscode",
+                "vercel/next.js",
+                "anomalyco/opencode&openclaw/openclaw",
+              ].map((example) => (
                 <button
                   key={example}
                   type="button"
