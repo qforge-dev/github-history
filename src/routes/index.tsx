@@ -1,4 +1,5 @@
 import { createFileRoute, useLocation, useNavigate } from "@tanstack/react-router"
+import { Github, Twitter } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -368,8 +369,11 @@ export function RepoHistoryPage() {
 
       const image = new Image()
       const canvas = document.createElement("canvas")
-      canvas.width = width
-      canvas.height = height
+      const dpr = window.devicePixelRatio || 1
+      canvas.width = Math.round(width * dpr)
+      canvas.height = Math.round(height * dpr)
+      canvas.style.width = `${width}px`
+      canvas.style.height = `${height}px`
 
       const ctx = canvas.getContext("2d")
       if (!ctx) {
@@ -379,6 +383,7 @@ export function RepoHistoryPage() {
 
       await new Promise<void>((resolve, reject) => {
         image.onload = () => {
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
           ctx.fillStyle = "#ffffff"
           ctx.fillRect(0, 0, width, height)
           ctx.drawImage(image, 0, 0, width, height)
@@ -468,14 +473,36 @@ export function RepoHistoryPage() {
   return (
     <div className="min-h-screen bg-white text-black">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 px-3 py-4 sm:px-6 sm:py-8">
-        <header className="flex flex-wrap items-center gap-3 text-left">
-          <div className="inline-flex items-center gap-2 text-sm font-medium text-black">
-            <span className="text-lg">📈</span>
-            <span className="lowercase">github-history.com</span>
+        <header className="flex flex-wrap items-center justify-between gap-4 text-left">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="inline-flex items-center gap-2 text-sm font-medium text-black">
+              <span className="text-lg">📈</span>
+              <span className="lowercase">github-history.com</span>
+            </div>
+            <h1 className="text-lg font-semibold text-black sm:text-xl">
+              Track repository data over time
+            </h1>
           </div>
-          <h1 className="text-lg font-semibold text-black sm:text-xl">
-            Track repository data over time
-          </h1>
+          <div className="flex items-center gap-3">
+            <a
+              href="https://twitter.com/michalwarda"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Twitter"
+              className="rounded-full p-2 text-black transition-opacity hover:opacity-70"
+            >
+              <Twitter className="h-5 w-5" />
+            </a>
+            <a
+              href="https://github.com/qforge-dev/github-history"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub"
+              className="rounded-full p-2 text-black transition-opacity hover:opacity-70"
+            >
+              <Github className="h-5 w-5" />
+            </a>
+          </div>
         </header>
 
         <section className="space-y-4">

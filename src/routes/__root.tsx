@@ -29,10 +29,16 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         content: 'width=device-width, initial-scale=1',
       },
       {
-        title: 'GitHub Issue History',
+        title: 'github-history.com',
       },
     ],
     links: [
+      {
+        rel: 'icon',
+        href: '/favicon.svg',
+        type: 'image/svg+xml',
+        sizes: 'any',
+      },
       {
         rel: 'stylesheet',
         href: appCss,
