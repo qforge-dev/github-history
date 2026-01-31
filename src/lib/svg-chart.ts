@@ -54,7 +54,7 @@ const DEFAULT_OPTIONS: ChartOptions = {
   gridColor: "#111111",
   textColor: "#374151",
   pointRadius: 4,
-  targetPointCount: 15,
+  targetPointCount: 24,
   logScale: false,
   alignTimelines: false,
   showClosed: false,
@@ -631,7 +631,7 @@ export class SVGChartGenerator {
 
   private buildFooter(): string {
     const x = this.options.width - this.options.padding
-    const y = this.options.height - this.options.padding + 36
+    const y = this.options.height - this.options.padding + 48
 
     return `<text x="${x}" y="${y}" text-anchor="end" class="chart-text chart-footer">github-history.com</text>`
   }
@@ -894,26 +894,26 @@ export class SVGChartGenerator {
       fill: ${this.options.textColor};
     }
     .chart-title {
-      font-size: 16px;
+      font-size: 22px;
       font-weight: 600;
     }
     .chart-axis {
-      font-size: 12px;
+      font-size: 16px;
       font-weight: 600;
       fill: #111111;
     }
     .chart-axis-x {
-      font-size: 11px;
+      font-size: 15px;
       font-weight: 600;
     }
     .legend .chart-text {
       font-weight: 600;
     }
     .chart-empty {
-      font-size: 16px;
+      font-size: 22px;
     }
     .chart-footer {
-      font-size: 13px;
+      font-size: 18px;
       opacity: 0.9;
     }
     .data-point {
