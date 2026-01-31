@@ -62,7 +62,10 @@ const DEFAULT_OPTIONS: ChartOptions = {
 
 const SERIES_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"]
 
-const VIRGIL_FONT_PATH = resolve(process.cwd(), "public", "fonts", "Virgil.woff2")
+const VIRGIL_FONT_PATHS = [
+  resolve(process.cwd(), "public", "fonts", "Virgil.woff2"),
+  resolve(process.cwd(), ".output", "public", "fonts", "Virgil.woff2"),
+]
 
 const ROUGHNESS = {
   chartLine: { roughness: 1.5, bowing: 1.5, strokeWidth: 3 },
@@ -86,10 +89,17 @@ const getVirgilFontDataUrl = (): string | null => {
     return cachedVirgilFontDataUrl
   }
 
-  try {
-    const fontBuffer = readFileSync(VIRGIL_FONT_PATH)
-    cachedVirgilFontDataUrl = `data:font/woff2;base64,${fontBuffer.toString("base64")}`
-  } catch {
+  for (const fontPath of VIRGIL_FONT_PATHS) {
+    try {
+      const fontBuffer = readFileSync(fontPath)
+      cachedVirgilFontDataUrl = `data:font/woff2;base64,${fontBuffer.toString("base64")}`
+      break
+    } catch {
+      continue
+    }
+  }
+
+  if (cachedVirgilFontDataUrl === null) {
     cachedVirgilFontDataUrl = ""
   }
 

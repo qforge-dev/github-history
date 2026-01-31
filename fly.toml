@@ -1,0 +1,28 @@
+app = "repo-history"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  MIGRATE_ON_START = "false"
+  POSTGRES_USER = "postgres"
+  POSTGRES_PASSWORD = "postgres"
+  POSTGRES_DB = "repo_history"
+  BINARY_SEARCH_THRESHOLD = "50"
+  BINARY_SEARCH_MAX_INTERVAL = "30"
+  BINARY_SEARCH_MIN_INTERVAL = "1"
+  CHART_TARGET_POINTS = "15"
+
+[deploy]
+  release_command = "bun --bun run db:migrate"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_start_machines = true
+  auto_stop_machines = "stop"
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
