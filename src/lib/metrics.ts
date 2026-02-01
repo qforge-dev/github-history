@@ -1,4 +1,11 @@
-export const METRIC_VALUES = ["created", "closed", "net"] as const;
+export const METRIC_VALUES = [
+  "created",
+  "closed",
+  "net",
+  "pr_open",
+  "pr_closed",
+  "pr_merged",
+] as const;
 
 export type MetricValue = (typeof METRIC_VALUES)[number];
 
@@ -40,4 +47,20 @@ export function serializeMetricsParam(metrics: MetricValue[]): string | null {
     return null;
   }
   return normalized.join(",");
+}
+
+export function isIssueMetric(metric: MetricValue): boolean {
+  return metric === "created" || metric === "closed" || metric === "net";
+}
+
+export function isPRMetric(metric: MetricValue): boolean {
+  return metric === "pr_open" || metric === "pr_closed" || metric === "pr_merged";
+}
+
+export function hasIssueMetrics(metrics: MetricValue[]): boolean {
+  return metrics.some(isIssueMetric);
+}
+
+export function hasPRMetrics(metrics: MetricValue[]): boolean {
+  return metrics.some(isPRMetric);
 }

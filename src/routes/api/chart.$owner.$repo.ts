@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { issueHistoryService } from "@/lib/issue-history-service"
+import { repoHistoryService } from "@/lib/repo-history-service"
 import { parseMetricsParam } from "@/lib/metrics"
 
 function createErrorSvg(message: string): string {
@@ -35,7 +35,7 @@ export const Route = createFileRoute("/api/chart/$owner/$repo")({
         }
 
         try {
-          const svg = await issueHistoryService.getIssueHistorySVG(owner, repo, {
+          const svg = await repoHistoryService.getIssueHistorySVG(owner, repo, {
             logScale,
             metrics,
           })

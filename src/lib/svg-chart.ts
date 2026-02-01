@@ -1,5 +1,5 @@
 import type { DataPoint } from "./binary-search";
-import { normalizeMetrics } from "./metrics";
+import { normalizeMetrics, hasIssueMetrics, hasPRMetrics } from "./metrics";
 import type { MetricValue } from "./metrics";
 import rough from "roughjs";
 import { readFileSync } from "node:fs";
@@ -51,6 +51,32 @@ interface AxisScale {
   values: number[];
 }
 
+interface DisplayPoint {
+  date: Date;
+  count: number;
+}
+
+type LineStyle = "solid" | "dotted" | "short-dash" | "long-dash" | "dash-dot" | "double-dot";
+
+type SymbolStyle = "circle" | "square" | "diamond" | "triangle" | "cross" | "star";
+
+interface MetricLineConfig {
+  metric: MetricValue;
+  label: string;
+  lineStyle: LineStyle;
+  symbolStyle: SymbolStyle;
+  color: string;
+}
+
+const METRIC_LINE_CONFIGS: MetricLineConfig[] = [
+  { metric: "created", label: "Issues Created", lineStyle: "solid", symbolStyle: "circle", color: "#22c55e" },
+  { metric: "closed", label: "Issues Closed", lineStyle: "dotted", symbolStyle: "square", color: "#22c55e" },
+  { metric: "net", label: "Issues Net", lineStyle: "short-dash", symbolStyle: "diamond", color: "#22c55e" },
+  { metric: "pr_open", label: "PRs Open", lineStyle: "long-dash", symbolStyle: "triangle", color: "#22c55e" },
+  { metric: "pr_closed", label: "PRs Closed", lineStyle: "dash-dot", symbolStyle: "cross", color: "#22c55e" },
+  { metric: "pr_merged", label: "PRs Merged", lineStyle: "double-dot", symbolStyle: "star", color: "#22c55e" },
+];
+
 const DEFAULT_OPTIONS: ChartOptions = {
   width: 900,
   height: 600,
@@ -67,6 +93,9 @@ const DEFAULT_OPTIONS: ChartOptions = {
 };
 
 const SERIES_COLORS = ["#22c55e", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6"];
+
+const ISSUE_COLOR = "#22c55e";
+const PR_COLOR = "#22c55e";
 
 const VIRGIL_FONT_PATHS = [
   resolve(process.cwd(), "public", "fonts", "Virgil.woff2"),
@@ -129,62 +158,88 @@ export class SVGChartGenerator {
     const showCreated = metrics.includes("created");
     const showClosed = metrics.includes("closed");
     const showNet = metrics.includes("net");
+    const showPrOpen = metrics.includes("pr_open");
+    const showPrClosed = metrics.includes("pr_closed");
+    const showPrMerged = metrics.includes("pr_merged");
 
     if (dataPoints.length === 0) {
-      return this.buildEmptyChart(`${repoFullName} - Issue History`, chartArea);
+      return this.buildEmptyChart(this.buildChartTitle(repoFullName, metrics), chartArea);
     }
 
     const sortedPoints = [...dataPoints].sort(
       (a, b) => a.date.getTime() - b.date.getTime(),
     );
     const displayPoints = this.decimatePoints(sortedPoints);
-    const createdPoints = showCreated ? displayPoints : [];
-    const closedPoints = showClosed
-      ? displayPoints.map((point) => ({
-          ...point,
-          count: point.closedCount,
-        }))
-      : [];
-    const netPoints = showNet
-      ? displayPoints.map((point) => ({
-          ...point,
-          count: point.count - point.closedCount,
-        }))
-      : [];
-    const allSeriesPoints = [...createdPoints, ...closedPoints, ...netPoints];
+    const createdPoints = showCreated ? this.extractDisplayPoints(displayPoints, "created") : [];
+    const closedPoints = showClosed ? this.extractDisplayPoints(displayPoints, "closed") : [];
+    const netPoints = showNet ? this.extractDisplayPoints(displayPoints, "net") : [];
+    const prOpenPoints = showPrOpen ? this.extractDisplayPoints(displayPoints, "pr_open") : [];
+    const prClosedPoints = showPrClosed ? this.extractDisplayPoints(displayPoints, "pr_closed") : [];
+    const prMergedPoints = showPrMerged ? this.extractDisplayPoints(displayPoints, "pr_merged") : [];
+    
+    const allSeriesPoints = [
+      ...createdPoints,
+      ...closedPoints,
+      ...netPoints,
+      ...prOpenPoints,
+      ...prClosedPoints,
+      ...prMergedPoints,
+    ];
     const hasNegativeValues = this.hasNegativeValues(allSeriesPoints);
     const effectiveLogScale = logScale && !hasNegativeValues;
 
     const pixelPoints = showCreated
-      ? this.mapDataToPixels(createdPoints, chartArea, {
+      ? this.mapDisplayPointsToPixels(createdPoints, chartArea, {
           logScale: effectiveLogScale,
+          allPoints: allSeriesPoints,
         })
       : [];
     const pixelClosedPoints = showClosed
-      ? this.mapDataToPixels(closedPoints, chartArea, {
+      ? this.mapDisplayPointsToPixels(closedPoints, chartArea, {
           logScale: effectiveLogScale,
+          allPoints: allSeriesPoints,
         })
       : [];
     const pixelNetPoints = showNet
-      ? this.mapDataToPixels(netPoints, chartArea, {
+      ? this.mapDisplayPointsToPixels(netPoints, chartArea, {
           logScale: effectiveLogScale,
+          allPoints: allSeriesPoints,
         })
       : [];
+    const pixelPrOpenPoints = showPrOpen
+      ? this.mapDisplayPointsToPixels(prOpenPoints, chartArea, {
+          logScale: effectiveLogScale,
+          allPoints: allSeriesPoints,
+        })
+      : [];
+    const pixelPrClosedPoints = showPrClosed
+      ? this.mapDisplayPointsToPixels(prClosedPoints, chartArea, {
+          logScale: effectiveLogScale,
+          allPoints: allSeriesPoints,
+        })
+      : [];
+    const pixelPrMergedPoints = showPrMerged
+      ? this.mapDisplayPointsToPixels(prMergedPoints, chartArea, {
+          logScale: effectiveLogScale,
+          allPoints: allSeriesPoints,
+        })
+      : [];
+    
     const yScale = this.calculateYAxisScale(
-      allSeriesPoints.length > 0 ? allSeriesPoints : displayPoints,
+      allSeriesPoints.length > 0 ? allSeriesPoints : this.extractDisplayPoints(displayPoints, "created"),
       effectiveLogScale,
     );
-    const dateLabels = this.selectDateLabels(displayPoints);
+    const dateLabels = this.selectDateLabelsFromDisplayPoints(displayPoints);
 
     const elements: string[] = [];
 
     elements.push(this.buildDefs());
     elements.push(this.buildBackground());
-    elements.push(this.buildTitle(`${repoFullName} - Issue History`));
+    elements.push(this.buildTitle(this.buildChartTitle(repoFullName, metrics)));
     elements.push(this.buildFooter());
     elements.push(this.buildAxisLines(chartArea, roughGenerator));
     elements.push(this.buildYAxis(chartArea, yScale, effectiveLogScale));
-    elements.push(this.buildXAxis(chartArea, sortedPoints, dateLabels));
+    elements.push(this.buildXAxisFromDisplayPoints(chartArea, sortedPoints, dateLabels));
     if (metrics.length > 1) {
       elements.push(
         this.buildLineStyleLegend(chartArea, roughGenerator, metrics),
@@ -193,66 +248,63 @@ export class SVGChartGenerator {
 
     if (showCreated && pixelPoints.length > 1) {
       elements.push(
-        this.buildPath(pixelPoints, roughGenerator, this.options.lineColor),
+        this.buildPath(pixelPoints, roughGenerator, ISSUE_COLOR, "solid"),
       );
     }
-
     if (showClosed && pixelClosedPoints.length > 1) {
       elements.push(
-        this.buildPath(
-          pixelClosedPoints,
-          roughGenerator,
-          this.options.lineColor,
-          {
-            dotted: true,
-          },
-        ),
+        this.buildPath(pixelClosedPoints, roughGenerator, ISSUE_COLOR, "dotted"),
       );
     }
     if (showNet && pixelNetPoints.length > 1) {
       elements.push(
-        this.buildPath(
-          pixelNetPoints,
-          roughGenerator,
-          this.options.lineColor,
-          {
-            dashed: true,
-          },
-        ),
+        this.buildPath(pixelNetPoints, roughGenerator, ISSUE_COLOR, "short-dash"),
+      );
+    }
+    if (showPrOpen && pixelPrOpenPoints.length > 1) {
+      elements.push(
+        this.buildPath(pixelPrOpenPoints, roughGenerator, PR_COLOR, "long-dash"),
+      );
+    }
+    if (showPrClosed && pixelPrClosedPoints.length > 1) {
+      elements.push(
+        this.buildPath(pixelPrClosedPoints, roughGenerator, PR_COLOR, "dash-dot"),
+      );
+    }
+    if (showPrMerged && pixelPrMergedPoints.length > 1) {
+      elements.push(
+        this.buildPath(pixelPrMergedPoints, roughGenerator, PR_COLOR, "double-dot"),
       );
     }
 
     if (showCreated) {
       elements.push(
-        this.buildDataPoints(
-          pixelPoints,
-          roughGenerator,
-          this.options.lineColor,
-          `${repoFullName}`,
-          "Created",
-        ),
+        this.buildDataPoints(pixelPoints, roughGenerator, ISSUE_COLOR, `${repoFullName}`, "Created", "circle"),
       );
     }
     if (showClosed) {
       elements.push(
-        this.buildDataPoints(
-          pixelClosedPoints,
-          roughGenerator,
-          this.options.lineColor,
-          `${repoFullName}`,
-          "Closed",
-        ),
+        this.buildDataPoints(pixelClosedPoints, roughGenerator, ISSUE_COLOR, `${repoFullName}`, "Closed", "square"),
       );
     }
     if (showNet) {
       elements.push(
-        this.buildDataPoints(
-          pixelNetPoints,
-          roughGenerator,
-          this.options.lineColor,
-          `${repoFullName}`,
-          "Net Active",
-        ),
+        this.buildDataPoints(pixelNetPoints, roughGenerator, ISSUE_COLOR, `${repoFullName}`, "Net Active", "diamond"),
+      );
+    }
+    if (showPrOpen) {
+      elements.push(
+        this.buildDataPoints(pixelPrOpenPoints, roughGenerator, PR_COLOR, `${repoFullName}`, "Open PRs", "triangle"),
+      );
+    }
+    if (showPrClosed) {
+      elements.push(
+        this.buildDataPoints(pixelPrClosedPoints, roughGenerator, PR_COLOR, `${repoFullName}`, "Closed PRs", "cross"),
+      );
+    }
+    if (showPrMerged) {
+      elements.push(
+        this.buildDataPoints(pixelPrMergedPoints, roughGenerator, PR_COLOR, `${repoFullName}`, "Merged PRs", "star"),
       );
     }
     elements.push(this.buildStyles());
@@ -260,7 +312,7 @@ export class SVGChartGenerator {
     return this.wrapSvg(elements.join("\n"));
   }
 
-  generateMultiSeries(series: ChartSeries[], title = "Issue History"): string {
+  generateMultiSeries(series: ChartSeries[], title: string | null = null): string {
     const chartArea = this.calculateChartArea();
     const logScale = this.options.logScale;
     const alignTimelines = this.options.alignTimelines;
@@ -268,12 +320,16 @@ export class SVGChartGenerator {
     const showCreated = metrics.includes("created");
     const showClosed = metrics.includes("closed");
     const showNet = metrics.includes("net");
+    const showPrOpen = metrics.includes("pr_open");
+    const showPrClosed = metrics.includes("pr_closed");
+    const showPrMerged = metrics.includes("pr_merged");
+    const chartTitle = title ?? this.buildMultiSeriesTitle(metrics);
 
     if (series.length === 0) {
-      return this.buildEmptyChart(title, chartArea);
+      return this.buildEmptyChart(chartTitle, chartArea);
     }
 
-    const roughGenerator = this.createRoughGenerator(title);
+    const roughGenerator = this.createRoughGenerator(chartTitle);
     const seriesWithColors = this.assignSeriesColors(series);
     const normalized = alignTimelines
       ? this.normalizeSeriesToElapsedTime(seriesWithColors)
@@ -294,19 +350,29 @@ export class SVGChartGenerator {
     );
 
     if (visibleSeries.length === 0) {
-      return this.buildEmptyChart(title, chartArea);
+      return this.buildEmptyChart(chartTitle, chartArea);
     }
+    
     const allPoints = activeSeries.flatMap((entry) =>
       entry.dataPoints.flatMap((point) => {
-        const points: DataPoint[] = [];
+        const points: DisplayPoint[] = [];
         if (showCreated) {
-          points.push(point);
+          points.push({ date: point.date, count: point.count });
         }
         if (showClosed) {
-          points.push({ ...point, count: point.closedCount });
+          points.push({ date: point.date, count: point.closedCount });
         }
         if (showNet) {
-          points.push({ ...point, count: point.count - point.closedCount });
+          points.push({ date: point.date, count: point.count - point.closedCount });
+        }
+        if (showPrOpen) {
+          points.push({ date: point.date, count: point.prCount });
+        }
+        if (showPrClosed) {
+          points.push({ date: point.date, count: point.closedPrCount });
+        }
+        if (showPrMerged) {
+          points.push({ date: point.date, count: point.mergedPrCount });
         }
         return points;
       }),
@@ -336,13 +402,13 @@ export class SVGChartGenerator {
     );
     const dateLabels = alignTimelines
       ? []
-      : this.selectDateLabels(sortedAllPoints);
+      : this.selectDateLabelsFromDisplayPoints(sortedAllPoints);
 
     const elements: string[] = [];
 
     elements.push(this.buildDefs());
     elements.push(this.buildBackground());
-    elements.push(this.buildTitle(title));
+    elements.push(this.buildTitle(chartTitle));
     elements.push(this.buildFooter());
     elements.push(this.buildAxisLines(chartArea, roughGenerator));
     elements.push(this.buildYAxis(chartArea, yScale, effectiveLogScale));
@@ -376,21 +442,15 @@ export class SVGChartGenerator {
         (a, b) => a.date.getTime() - b.date.getTime(),
       );
       const displayPoints = this.decimatePoints(sortedPoints);
-      const createdPoints = showCreated ? displayPoints : [];
-      const closedPoints = showClosed
-        ? displayPoints.map((point) => ({
-            ...point,
-            count: point.closedCount,
-          }))
-        : [];
-      const netPoints = showNet
-        ? displayPoints.map((point) => ({
-            ...point,
-            count: point.count - point.closedCount,
-          }))
-        : [];
+      const createdPoints = showCreated ? this.extractDisplayPoints(displayPoints, "created") : [];
+      const closedPoints = showClosed ? this.extractDisplayPoints(displayPoints, "closed") : [];
+      const netPoints = showNet ? this.extractDisplayPoints(displayPoints, "net") : [];
+      const prOpenPoints = showPrOpen ? this.extractDisplayPoints(displayPoints, "pr_open") : [];
+      const prClosedPoints = showPrClosed ? this.extractDisplayPoints(displayPoints, "pr_closed") : [];
+      const prMergedPoints = showPrMerged ? this.extractDisplayPoints(displayPoints, "pr_merged") : [];
+      
       const pixelPoints = showCreated
-        ? this.mapDataToPixels(createdPoints, chartArea, {
+        ? this.mapDisplayPointsToPixels(createdPoints, chartArea, {
             minDate,
             maxDate,
             minCount,
@@ -402,7 +462,7 @@ export class SVGChartGenerator {
           })
         : [];
       const pixelClosedPoints = showClosed
-        ? this.mapDataToPixels(closedPoints, chartArea, {
+        ? this.mapDisplayPointsToPixels(closedPoints, chartArea, {
             minDate,
             maxDate,
             minCount,
@@ -414,7 +474,43 @@ export class SVGChartGenerator {
           })
         : [];
       const pixelNetPoints = showNet
-        ? this.mapDataToPixels(netPoints, chartArea, {
+        ? this.mapDisplayPointsToPixels(netPoints, chartArea, {
+            minDate,
+            maxDate,
+            minCount,
+            maxCount,
+            logScale: effectiveLogScale,
+            formatDate: alignTimelines
+              ? (date) => this.formatElapsedMonths(date.getTime())
+              : undefined,
+          })
+        : [];
+      const pixelPrOpenPoints = showPrOpen
+        ? this.mapDisplayPointsToPixels(prOpenPoints, chartArea, {
+            minDate,
+            maxDate,
+            minCount,
+            maxCount,
+            logScale: effectiveLogScale,
+            formatDate: alignTimelines
+              ? (date) => this.formatElapsedMonths(date.getTime())
+              : undefined,
+          })
+        : [];
+      const pixelPrClosedPoints = showPrClosed
+        ? this.mapDisplayPointsToPixels(prClosedPoints, chartArea, {
+            minDate,
+            maxDate,
+            minCount,
+            maxCount,
+            logScale: effectiveLogScale,
+            formatDate: alignTimelines
+              ? (date) => this.formatElapsedMonths(date.getTime())
+              : undefined,
+          })
+        : [];
+      const pixelPrMergedPoints = showPrMerged
+        ? this.mapDisplayPointsToPixels(prMergedPoints, chartArea, {
             minDate,
             maxDate,
             minCount,
@@ -428,66 +524,63 @@ export class SVGChartGenerator {
 
       if (showCreated && pixelPoints.length > 1) {
         elements.push(
-          this.buildPath(
-            pixelPoints,
-            roughGenerator,
-            entry.color ?? this.options.lineColor,
-          ),
+          this.buildPath(pixelPoints, roughGenerator, entry.color ?? ISSUE_COLOR, "solid"),
         );
       }
-
       if (showClosed && pixelClosedPoints.length > 1) {
         elements.push(
-          this.buildPath(
-            pixelClosedPoints,
-            roughGenerator,
-            entry.color ?? this.options.lineColor,
-            { dotted: true },
-          ),
+          this.buildPath(pixelClosedPoints, roughGenerator, entry.color ?? ISSUE_COLOR, "dotted"),
         );
       }
       if (showNet && pixelNetPoints.length > 1) {
         elements.push(
-          this.buildPath(
-            pixelNetPoints,
-            roughGenerator,
-            entry.color ?? this.options.lineColor,
-            { dashed: true },
-          ),
+          this.buildPath(pixelNetPoints, roughGenerator, entry.color ?? ISSUE_COLOR, "short-dash"),
+        );
+      }
+      if (showPrOpen && pixelPrOpenPoints.length > 1) {
+        elements.push(
+          this.buildPath(pixelPrOpenPoints, roughGenerator, entry.color ?? PR_COLOR, "long-dash"),
+        );
+      }
+      if (showPrClosed && pixelPrClosedPoints.length > 1) {
+        elements.push(
+          this.buildPath(pixelPrClosedPoints, roughGenerator, entry.color ?? PR_COLOR, "dash-dot"),
+        );
+      }
+      if (showPrMerged && pixelPrMergedPoints.length > 1) {
+        elements.push(
+          this.buildPath(pixelPrMergedPoints, roughGenerator, entry.color ?? PR_COLOR, "double-dot"),
         );
       }
 
       if (showCreated) {
         elements.push(
-          this.buildDataPoints(
-            pixelPoints,
-            roughGenerator,
-            entry.color ?? this.options.lineColor,
-            entry.repoFullName,
-            "Created",
-          ),
+          this.buildDataPoints(pixelPoints, roughGenerator, entry.color ?? ISSUE_COLOR, entry.repoFullName, "Created", "circle"),
         );
       }
       if (showClosed) {
         elements.push(
-          this.buildDataPoints(
-            pixelClosedPoints,
-            roughGenerator,
-            entry.color ?? this.options.lineColor,
-            entry.repoFullName,
-            "Closed",
-          ),
+          this.buildDataPoints(pixelClosedPoints, roughGenerator, entry.color ?? ISSUE_COLOR, entry.repoFullName, "Closed", "square"),
         );
       }
       if (showNet) {
         elements.push(
-          this.buildDataPoints(
-            pixelNetPoints,
-            roughGenerator,
-            entry.color ?? this.options.lineColor,
-            entry.repoFullName,
-            "Net Active",
-          ),
+          this.buildDataPoints(pixelNetPoints, roughGenerator, entry.color ?? ISSUE_COLOR, entry.repoFullName, "Net Active", "diamond"),
+        );
+      }
+      if (showPrOpen) {
+        elements.push(
+          this.buildDataPoints(pixelPrOpenPoints, roughGenerator, entry.color ?? PR_COLOR, entry.repoFullName, "Open PRs", "triangle"),
+        );
+      }
+      if (showPrClosed) {
+        elements.push(
+          this.buildDataPoints(pixelPrClosedPoints, roughGenerator, entry.color ?? PR_COLOR, entry.repoFullName, "Closed PRs", "cross"),
+        );
+      }
+      if (showPrMerged) {
+        elements.push(
+          this.buildDataPoints(pixelPrMergedPoints, roughGenerator, entry.color ?? PR_COLOR, entry.repoFullName, "Merged PRs", "star"),
         );
       }
     }
@@ -495,6 +588,56 @@ export class SVGChartGenerator {
     elements.push(this.buildStyles());
 
     return this.wrapSvg(elements.join("\n"));
+  }
+
+  private buildChartTitle(repoFullName: string, metrics: MetricValue[]): string {
+    const hasIssues = hasIssueMetrics(metrics);
+    const hasPRs = hasPRMetrics(metrics);
+    
+    if (hasIssues && hasPRs) {
+      return `${repoFullName} - Issue &amp; PR History`;
+    }
+    if (hasPRs) {
+      return `${repoFullName} - PR History`;
+    }
+    return `${repoFullName} - Issue History`;
+  }
+
+  private buildMultiSeriesTitle(metrics: MetricValue[]): string {
+    const hasIssues = hasIssueMetrics(metrics);
+    const hasPRs = hasPRMetrics(metrics);
+    
+    if (hasIssues && hasPRs) {
+      return "Issue &amp; PR History";
+    }
+    if (hasPRs) {
+      return "PR History";
+    }
+    return "Issue History";
+  }
+
+  private extractDisplayPoints(dataPoints: DataPoint[], metric: MetricValue): DisplayPoint[] {
+    return dataPoints.map((point) => ({
+      date: point.date,
+      count: this.getCountForMetric(point, metric),
+    }));
+  }
+
+  private getCountForMetric(point: DataPoint, metric: MetricValue): number {
+    switch (metric) {
+      case "created":
+        return point.count;
+      case "closed":
+        return point.closedCount;
+      case "net":
+        return point.count - point.closedCount;
+      case "pr_open":
+        return point.prCount;
+      case "pr_closed":
+        return point.closedPrCount;
+      case "pr_merged":
+        return point.mergedPrCount;
+    }
   }
 
   private calculateChartArea(): ChartArea {
@@ -523,8 +666,8 @@ export class SVGChartGenerator {
     return this.wrapSvg(elements.join("\n"));
   }
 
-  private mapDataToPixels(
-    dataPoints: DataPoint[],
+  private mapDisplayPointsToPixels(
+    displayPoints: DisplayPoint[],
     chartArea: ChartArea,
     scale?: {
       minDate?: number;
@@ -533,18 +676,20 @@ export class SVGChartGenerator {
       maxCount?: number;
       logScale?: boolean;
       formatDate?: (date: Date) => string;
+      allPoints?: DisplayPoint[];
     },
   ): PixelPoint[] {
-    if (dataPoints.length === 0) {
+    if (displayPoints.length === 0) {
       return [];
     }
 
-    const minDate = scale?.minDate ?? dataPoints[0].date.getTime();
+    const referencePoints = scale?.allPoints ?? displayPoints;
+    const minDate = scale?.minDate ?? referencePoints[0].date.getTime();
     const maxDate =
-      scale?.maxDate ?? dataPoints[dataPoints.length - 1].date.getTime();
+      scale?.maxDate ?? referencePoints[referencePoints.length - 1].date.getTime();
     const dateRange = maxDate - minDate;
 
-    const counts = dataPoints.map((p) => p.count);
+    const counts = referencePoints.map((p) => p.count);
     const minCount = scale?.minCount ?? Math.min(...counts);
     const maxCount = scale?.maxCount ?? Math.max(...counts);
     const logScale = scale?.logScale ?? this.options.logScale;
@@ -556,7 +701,7 @@ export class SVGChartGenerator {
     const chartWidth = chartArea.right - chartArea.left;
     const chartHeight = chartArea.bottom - chartArea.top;
 
-    return dataPoints.map((point) => {
+    return displayPoints.map((point) => {
       let x: number;
       if (dateRange === 0) {
         x = chartArea.left + chartWidth / 2;
@@ -586,10 +731,10 @@ export class SVGChartGenerator {
   }
 
   private calculateYAxisScale(
-    dataPoints: DataPoint[],
+    displayPoints: DisplayPoint[],
     logScale: boolean,
   ): AxisScale {
-    const counts = dataPoints.map((p) => p.count);
+    const counts = displayPoints.map((p) => p.count);
     const minCount = Math.min(...counts);
     const maxCount = Math.max(...counts);
 
@@ -697,12 +842,12 @@ export class SVGChartGenerator {
     };
   }
 
-  private selectDateLabels(dataPoints: DataPoint[]): Date[] {
+  private selectDateLabelsFromDisplayPoints(displayPoints: DisplayPoint[]): Date[] {
     const targetCount = 7;
-    const totalPoints = dataPoints.length;
+    const totalPoints = displayPoints.length;
 
     if (totalPoints <= targetCount) {
-      return dataPoints.map((p) => p.date);
+      return displayPoints.map((p) => p.date);
     }
 
     const step = (totalPoints - 1) / (targetCount - 1);
@@ -710,7 +855,7 @@ export class SVGChartGenerator {
 
     for (let i = 0; i < targetCount; i++) {
       const index = Math.round(i * step);
-      labels.push(dataPoints[index].date);
+      labels.push(displayPoints[index].date);
     }
 
     return labels;
@@ -788,9 +933,7 @@ export class SVGChartGenerator {
     const x = this.options.width / 2;
     const y = this.options.padding / 2 + 10;
 
-    return `<text x="${x}" y="${y}" text-anchor="middle" class="chart-text chart-title">${this.escapeXml(
-      title,
-    )}</text>`;
+    return `<text x="${x}" y="${y}" text-anchor="middle" class="chart-text chart-title">${title}</text>`;
   }
 
   private buildFooter(): string {
@@ -842,19 +985,16 @@ export class SVGChartGenerator {
     const y = chartArea.top - 12;
     const rowHeight = 18;
     const lineLength = 26;
+    const symbolX = x + lineLength / 2;
     const items: string[] = [];
-    const labels = (
-      [
-        { value: "created", label: "Created", dotted: false, dashed: false },
-        { value: "closed", label: "Closed", dotted: true, dashed: false },
-        { value: "net", label: "Net Active", dotted: false, dashed: true },
-      ] as const
-    ).filter((entry) => metrics.includes(entry.value));
+    const activeConfigs = METRIC_LINE_CONFIGS.filter((config) => 
+      metrics.includes(config.metric)
+    );
 
-    labels.forEach((entry, index) => {
+    activeConfigs.forEach((config, index) => {
       const yOffset = y + index * rowHeight;
       const line = roughGenerator.line(x, yOffset, x + lineLength, yOffset, {
-        stroke: "#111111",
+        stroke: config.color,
         strokeWidth: 2,
         roughness: ROUGHNESS.gridLine.roughness,
         bowing: ROUGHNESS.gridLine.bowing,
@@ -862,16 +1002,15 @@ export class SVGChartGenerator {
       items.push(
         this.buildRoughPaths(
           roughGenerator.toPaths(line),
-          entry.dotted
-            ? { "stroke-dasharray": "4 6", "stroke-linecap": "round" }
-            : entry.dashed
-              ? { "stroke-dasharray": "8 4", "stroke-linecap": "round" }
-              : {},
+          this.getDashAttributesForStyle(config.lineStyle),
         ),
       );
       items.push(
+        this.buildSymbol(symbolX, yOffset, roughGenerator, config.color, config.symbolStyle),
+      );
+      items.push(
         `<text x="${x + lineLength + 8}" y="${yOffset + 4}" class="chart-text">${this.escapeXml(
-          entry.label,
+          config.label,
         )}</text>`,
       );
     });
@@ -951,7 +1090,7 @@ export class SVGChartGenerator {
     return `<g class="y-axis">${labels.join("\n")}</g>`;
   }
 
-  private buildXAxis(
+  private buildXAxisFromDisplayPoints(
     chartArea: ChartArea,
     dataPoints: DataPoint[],
     dateLabels: Date[],
@@ -1005,7 +1144,7 @@ export class SVGChartGenerator {
     pixelPoints: PixelPoint[],
     roughGenerator: RoughGenerator,
     lineColor: string,
-    options: { dotted?: boolean; dashed?: boolean } = {},
+    lineStyle: LineStyle = "solid",
   ): string {
     if (pixelPoints.length < 2) {
       return "";
@@ -1020,23 +1159,32 @@ export class SVGChartGenerator {
       preserveVertices: true,
     });
 
+    const dashAttributes = this.getDashAttributesForStyle(lineStyle);
+
     return `<g class="chart-line">${this.buildRoughPaths(
       roughGenerator.toPaths(roughLine),
-      options.dotted
-        ? {
-            "stroke-dasharray": "4 6",
-            "stroke-linecap": "round",
-          }
-        : options.dashed
-          ? {
-              "stroke-dasharray": "8 4",
-              "stroke-linecap": "round",
-            }
-          : {},
+      dashAttributes,
     )}</g>`;
   }
 
-  private hasNegativeValues(points: DataPoint[]): boolean {
+  private getDashAttributesForStyle(style: LineStyle): Record<string, string> {
+    switch (style) {
+      case "solid":
+        return {};
+      case "dotted":
+        return { "stroke-dasharray": "3 6", "stroke-linecap": "round" };
+      case "short-dash":
+        return { "stroke-dasharray": "8 6", "stroke-linecap": "round" };
+      case "long-dash":
+        return { "stroke-dasharray": "16 8", "stroke-linecap": "round" };
+      case "dash-dot":
+        return { "stroke-dasharray": "12 4 3 4", "stroke-linecap": "round" };
+      case "double-dot":
+        return { "stroke-dasharray": "3 4 3 8", "stroke-linecap": "round" };
+    }
+  }
+
+  private hasNegativeValues(points: DisplayPoint[]): boolean {
     return points.some((point) => point.count < 0);
   }
 
@@ -1046,27 +1194,15 @@ export class SVGChartGenerator {
     color: string,
     repoFullName: string,
     seriesLabel: string,
+    symbolStyle: SymbolStyle = "circle",
   ): string {
-    const circles: string[] = [];
+    const symbols: string[] = [];
     const safeRepo = this.escapeXml(repoFullName);
     const safeSeries = this.escapeXml(seriesLabel);
 
     for (const point of pixelPoints) {
-      const roughCircle = roughGenerator.circle(
-        point.x,
-        point.y,
-        this.options.pointRadius * 2,
-        {
-          stroke: color,
-          strokeWidth: ROUGHNESS.point.strokeWidth,
-          roughness: ROUGHNESS.point.roughness,
-          bowing: ROUGHNESS.point.bowing,
-          fill: color,
-          fillStyle: "solid",
-        },
-      );
-      circles.push(
-        this.buildRoughPaths(roughGenerator.toPaths(roughCircle), {
+      symbols.push(
+        this.buildSymbol(point.x, point.y, roughGenerator, color, symbolStyle, {
           class: "data-point",
           "data-date": point.date,
           "data-count": String(point.count),
@@ -1076,7 +1212,85 @@ export class SVGChartGenerator {
       );
     }
 
-    return `<g class="data-points">${circles.join("\n")}</g>`;
+    return `<g class="data-points">${symbols.join("\n")}</g>`;
+  }
+
+  private buildSymbol(
+    x: number,
+    y: number,
+    roughGenerator: RoughGenerator,
+    color: string,
+    symbolStyle: SymbolStyle,
+    attributes: Record<string, string> = {},
+  ): string {
+    const size = this.options.pointRadius * 2;
+    const halfSize = size / 2;
+    const roughOptions = {
+      stroke: color,
+      strokeWidth: ROUGHNESS.point.strokeWidth,
+      roughness: ROUGHNESS.point.roughness,
+      bowing: ROUGHNESS.point.bowing,
+      fill: color,
+      fillStyle: "solid" as const,
+    };
+
+    let drawable;
+    switch (symbolStyle) {
+      case "circle":
+        drawable = roughGenerator.circle(x, y, size, roughOptions);
+        break;
+      case "square":
+        drawable = roughGenerator.rectangle(x - halfSize, y - halfSize, size, size, roughOptions);
+        break;
+      case "diamond":
+        drawable = roughGenerator.polygon([
+          [x, y - halfSize],
+          [x + halfSize, y],
+          [x, y + halfSize],
+          [x - halfSize, y],
+        ], roughOptions);
+        break;
+      case "triangle":
+        drawable = roughGenerator.polygon([
+          [x, y - halfSize],
+          [x + halfSize, y + halfSize],
+          [x - halfSize, y + halfSize],
+        ], roughOptions);
+        break;
+      case "cross": {
+        const arm = halfSize * 0.7;
+        drawable = roughGenerator.polygon([
+          [x - arm, y - halfSize],
+          [x + arm, y - halfSize],
+          [x + arm, y - arm],
+          [x + halfSize, y - arm],
+          [x + halfSize, y + arm],
+          [x + arm, y + arm],
+          [x + arm, y + halfSize],
+          [x - arm, y + halfSize],
+          [x - arm, y + arm],
+          [x - halfSize, y + arm],
+          [x - halfSize, y - arm],
+          [x - arm, y - arm],
+        ], roughOptions);
+        break;
+      }
+      case "star": {
+        const outer = halfSize;
+        const inner = halfSize * 0.4;
+        const points: [number, number][] = [];
+        for (let i = 0; i < 5; i++) {
+          const outerAngle = (i * 72 - 90) * (Math.PI / 180);
+          const innerAngle = ((i * 72) + 36 - 90) * (Math.PI / 180);
+          points.push([x + outer * Math.cos(outerAngle), y + outer * Math.sin(outerAngle)]);
+          points.push([x + inner * Math.cos(innerAngle), y + inner * Math.sin(innerAngle)]);
+        }
+        drawable = roughGenerator.polygon(points, roughOptions);
+        break;
+      }
+    }
+
+    return this.buildRoughPaths(roughGenerator.toPaths(drawable), attributes);
   }
 
   private buildStyles(): string {
@@ -1281,6 +1495,9 @@ ${content}
           date: new Date(elapsedMs),
           count: point.count,
           closedCount: point.closedCount,
+          prCount: point.prCount,
+          closedPrCount: point.closedPrCount,
+          mergedPrCount: point.mergedPrCount,
         };
       });
 

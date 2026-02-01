@@ -34,6 +34,25 @@ export const issueSnapshots = pgTable(
   ]
 );
 
+export const prSnapshots = pgTable(
+  "pr_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    repositoryId: integer("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    snapshotDate: date("snapshot_date").notNull(),
+    prCount: integer("pr_count").notNull(),
+    closedPrCount: integer("closed_pr_count").notNull().default(0),
+    mergedPrCount: integer("merged_pr_count").notNull().default(0),
+  },
+  (table) => [
+    unique("pr_snapshots_repository_date_unique").on(table.repositoryId, table.snapshotDate),
+    index("pr_snapshots_repository_id_idx").on(table.repositoryId),
+    index("pr_snapshots_snapshot_date_idx").on(table.snapshotDate),
+  ]
+);
+
 export const repositoryLocks = pgTable(
   "repository_locks",
   {

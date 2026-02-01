@@ -4,11 +4,17 @@ interface DataPoint {
   date: Date
   count: number
   closedCount: number
+  prCount: number
+  closedPrCount: number
+  mergedPrCount: number
 }
 
-interface IssueCounts {
+interface CombinedCounts {
   openCount: number
   closedCount: number
+  prOpenCount: number
+  prClosedCount: number
+  prMergedCount: number
 }
 
 interface BinarySearchConfig {
@@ -19,19 +25,19 @@ interface BinarySearchConfig {
 
 interface Segment {
   startDate: Date
-  startCounts: IssueCounts
+  startCounts: CombinedCounts
   endDate: Date
-  endCounts: IssueCounts
+  endCounts: CombinedCounts
 }
 
 export class AdaptiveResolutionFetcher {
   constructor(
     private config: BinarySearchConfig,
-    private fetchCounts: (dates: Date[]) => Promise<Map<string, IssueCounts>>
+    private fetchCounts: (dates: Date[]) => Promise<Map<string, CombinedCounts>>
   ) {}
 
   async discover(repoCreatedAt: Date, endDate: Date): Promise<DataPoint[]> {
-    const knownPoints = new Map<string, IssueCounts>()
+    const knownPoints = new Map<string, CombinedCounts>()
 
     const initialDates = [repoCreatedAt, endDate]
     const initialCounts = await this.fetchCounts(initialDates)
@@ -97,12 +103,15 @@ export class AdaptiveResolutionFetcher {
     const closedDiff = Math.abs(
       segment.endCounts.closedCount - segment.startCounts.closedCount
     )
-    const countDiff = Math.max(openDiff, closedDiff)
+    const prOpenDiff = Math.abs(segment.endCounts.prOpenCount - segment.startCounts.prOpenCount)
+    const prClosedDiff = Math.abs(segment.endCounts.prClosedCount - segment.startCounts.prClosedCount)
+    const prMergedDiff = Math.abs(segment.endCounts.prMergedCount - segment.startCounts.prMergedCount)
+    const countDiff = Math.max(openDiff, closedDiff, prOpenDiff, prClosedDiff, prMergedDiff)
 
     return countDiff > this.config.threshold || daysDiff > this.config.maxIntervalDays
   }
 
-  private collectMidDates(segments: Segment[], knownPoints: Map<string, IssueCounts>): Date[] {
+  private collectMidDates(segments: Segment[], knownPoints: Map<string, CombinedCounts>): Date[] {
     const midDates: Date[] = []
     const seenKeys = new Set<string>()
 
@@ -119,7 +128,7 @@ export class AdaptiveResolutionFetcher {
     return midDates
   }
 
-  private createNewSegments(segments: Segment[], knownPoints: Map<string, IssueCounts>): Segment[] {
+  private createNewSegments(segments: Segment[], knownPoints: Map<string, CombinedCounts>): Segment[] {
     const newSegments: Segment[] = []
 
     for (const segment of segments) {
@@ -179,7 +188,7 @@ export class AdaptiveResolutionFetcher {
     return batches
   }
 
-  private mapToDataPoints(knownPoints: Map<string, IssueCounts>): DataPoint[] {
+  private mapToDataPoints(knownPoints: Map<string, CombinedCounts>): DataPoint[] {
     const dataPoints: DataPoint[] = []
 
     for (const [dateKey, counts] of knownPoints) {
@@ -187,6 +196,9 @@ export class AdaptiveResolutionFetcher {
         date: new Date(dateKey),
         count: counts.openCount,
         closedCount: counts.closedCount,
+        prCount: counts.prOpenCount,
+        closedPrCount: counts.prClosedCount,
+        mergedPrCount: counts.prMergedCount,
       })
     }
 
@@ -204,4 +216,4 @@ export function createDefaultConfig(): BinarySearchConfig {
   }
 }
 
-export type { DataPoint, BinarySearchConfig }
+export type { DataPoint, BinarySearchConfig, CombinedCounts }

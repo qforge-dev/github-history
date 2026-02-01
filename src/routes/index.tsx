@@ -38,9 +38,12 @@ const EXAMPLES = [
   "anomalyco/opencode&openclaw/openclaw",
 ];
 const METRIC_OPTIONS: Array<{ value: MetricValue; label: string }> = [
-  { value: "created", label: "Created" },
-  { value: "closed", label: "Closed" },
-  { value: "net", label: "Net Active" },
+  { value: "created", label: "Issues Created" },
+  { value: "closed", label: "Issues Closed" },
+  { value: "net", label: "Issues Net Active" },
+  { value: "pr_open", label: "PRs Open" },
+  { value: "pr_closed", label: "PRs Closed" },
+  { value: "pr_merged", label: "PRs Merged" },
 ];
 
 interface TooltipState {
@@ -400,7 +403,7 @@ export function RepoHistoryPage() {
     repo: "",
     series: "",
   });
-  const handleMetricsChange = (next: MetricValue[]) => {
+  const handleMetricsChange = (next: string[]) => {
     setMetrics(normalizeMetrics(next));
   };
 
@@ -1282,7 +1285,7 @@ export function RepoHistoryPage() {
           <div className="font-medium">{tooltip.repo}</div>
           {tooltip.series && <div className="text-white">{tooltip.series}</div>}
           <div className="text-white">{tooltip.date}</div>
-          <div className="text-green-300">{tooltip.count} issues</div>
+          <div className="text-green-300">{tooltip.count}</div>
         </div>
       )}
     </div>

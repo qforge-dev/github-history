@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { issueHistoryService } from "@/lib/issue-history-service"
+import { repoHistoryService } from "@/lib/repo-history-service"
 import { parseRepoPath } from "@/lib/repo-parser"
 import { parseMetricsParam } from "@/lib/metrics"
 
@@ -117,7 +117,7 @@ export const Route = createFileRoute("/api/svg")({
         }
 
         try {
-          const svg = await issueHistoryService.getMultiRepoIssueHistorySVG(repos, {
+          const svg = await repoHistoryService.getMultiRepoIssueHistorySVG(repos, {
             logScale,
             alignTimelines,
             metrics,

@@ -1,6 +1,7 @@
 import { GitHubGraphQLClient } from "./github-graphql"
+import type { IssueCounts, PRCounts } from "./github-graphql"
 import { AdaptiveResolutionFetcher, createDefaultConfig } from "./binary-search"
-import type { DataPoint } from "./binary-search"
+import type { DataPoint, CombinedCounts } from "./binary-search"
 import { IssueHistoryCache } from "./cache"
 import { SVGChartGenerator } from "./svg-chart"
 import type { ChartOptions } from "./svg-chart"
@@ -10,7 +11,7 @@ const CACHE_FRESHNESS_HOURS = 24
 const LOCK_WAIT_TIMEOUT_MS = 2 * 60 * 1000
 const LOCK_WAIT_INTERVAL_MS = 2000
 
-class IssueHistoryService {
+class RepoHistoryService {
   private github: GitHubGraphQLClient
   private cache: IssueHistoryCache
   private chartGenerator: SVGChartGenerator
@@ -150,10 +151,46 @@ class IssueHistoryService {
   ): Promise<DataPoint[]> {
     const config = createDefaultConfig()
     const fetcher = new AdaptiveResolutionFetcher(config, (dates: Date[]) =>
-      this.github.getIssueCountsAtDates(owner, repo, dates)
+      this.fetchCombinedCounts(owner, repo, dates)
     )
 
     return fetcher.discover(startDate, endDate)
+  }
+
+  private async fetchCombinedCounts(
+    owner: string,
+    repo: string,
+    dates: Date[]
+  ): Promise<Map<string, CombinedCounts>> {
+    const [issueCounts, prCounts] = await Promise.all([
+      this.github.getIssueCountsAtDates(owner, repo, dates),
+      this.github.getPRCountsAtDates(owner, repo, dates),
+    ])
+
+    return this.mergeCounts(issueCounts, prCounts)
+  }
+
+  private mergeCounts(
+    issueCounts: Map<string, IssueCounts>,
+    prCounts: Map<string, PRCounts>
+  ): Map<string, CombinedCounts> {
+    const combined = new Map<string, CombinedCounts>()
+    const allDates = new Set<string>([...issueCounts.keys(), ...prCounts.keys()])
+
+    for (const dateKey of allDates) {
+      const issue = issueCounts.get(dateKey)
+      const pr = prCounts.get(dateKey)
+
+      combined.set(dateKey, {
+        openCount: issue?.openCount ?? 0,
+        closedCount: issue?.closedCount ?? 0,
+        prOpenCount: pr?.openCount ?? 0,
+        prClosedCount: pr?.closedCount ?? 0,
+        prMergedCount: pr?.mergedCount ?? 0,
+      })
+    }
+
+    return combined
   }
 
   private findLatestSnapshot(snapshots: DataPoint[]): DataPoint | null {
@@ -287,5 +324,5 @@ class IssueHistoryService {
   }
 }
 
-export const issueHistoryService = new IssueHistoryService()
-export { IssueHistoryService }
+export const repoHistoryService = new RepoHistoryService()
+export { RepoHistoryService }

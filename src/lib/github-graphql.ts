@@ -5,6 +5,7 @@ let githubRequestCount = 0;
 interface RepositoryInfo {
   createdAt: Date;
   totalIssues: number;
+  totalPRs: number;
 }
 
 interface RateLimitInfo {
@@ -21,6 +22,9 @@ interface RepositoryQueryResponse {
   repository: {
     createdAt: string;
     issues: {
+      totalCount: number;
+    };
+    pullRequests: {
       totalCount: number;
     };
   } | null;
@@ -42,7 +46,15 @@ interface IssueCounts {
   closedCount: number;
 }
 
+interface PRCounts {
+  openCount: number;
+  closedCount: number;
+  mergedCount: number;
+}
+
 type IssueCountsQueryResponse = Record<string, SearchCountResponse>;
+
+type PRCountsQueryResponse = Record<string, SearchCountResponse>;
 
 class GitHubGraphQLClient {
   private token: string;
@@ -66,6 +78,7 @@ class GitHubGraphQLClient {
     return {
       createdAt: new Date(response.data.repository.createdAt),
       totalIssues: response.data.repository.issues.totalCount,
+      totalPRs: response.data.repository.pullRequests.totalCount,
     };
   }
 
@@ -103,6 +116,50 @@ class GitHubGraphQLClient {
         results.set(isoDate, {
           openCount: openResult.issueCount,
           closedCount: closedResult?.issueCount ?? 0,
+        });
+      }
+    }
+
+    return results;
+  }
+
+  async getPRCountsAtDates(
+    owner: string,
+    name: string,
+    dates: Date[]
+  ): Promise<Map<string, PRCounts>> {
+    if (dates.length === 0) {
+      return new Map();
+    }
+
+    if (dates.length > MAX_DATES_PER_BATCH) {
+      throw new Error(`Maximum ${MAX_DATES_PER_BATCH} dates allowed per batch. Received: ${dates.length}`);
+    }
+
+    const query = buildPRCountsQuery(owner, name, dates);
+    const response = await this.executeQuery<PRCountsQueryResponse>(query);
+
+    if (!response.data) {
+      throw new Error("Failed to fetch PR counts");
+    }
+
+    const results = new Map<string, PRCounts>();
+
+    for (const date of dates) {
+      const isoDate = formatDateToISO(date);
+      const alias = dateToAlias(isoDate);
+      const openAlias = `pr_open_${alias}`;
+      const closedAlias = `pr_closed_${alias}`;
+      const mergedAlias = `pr_merged_${alias}`;
+      const openResult = response.data[openAlias];
+      const closedResult = response.data[closedAlias];
+      const mergedResult = response.data[mergedAlias];
+
+      if (openResult !== undefined) {
+        results.set(isoDate, {
+          openCount: openResult.issueCount,
+          closedCount: closedResult?.issueCount ?? 0,
+          mergedCount: mergedResult?.issueCount ?? 0,
         });
       }
     }
@@ -165,6 +222,9 @@ function buildRepositoryInfoQuery(owner: string, name: string): string {
         issues {
           totalCount
         }
+        pullRequests {
+          totalCount
+        }
       }
     }
   `;
@@ -184,6 +244,34 @@ function buildIssueCountsQuery(
     const queries = [
       `open_${alias}: search(query: "${escapeGraphQLString(openQuery)}", type: ISSUE, first: 0) { issueCount }`,
       `closed_${alias}: search(query: "${escapeGraphQLString(closedQuery)}", type: ISSUE, first: 0) { issueCount }`,
+    ];
+
+    return queries.join("\n      ");
+  });
+
+  return `
+    query {
+      ${searchQueries.join("\n      ")}
+    }
+  `;
+}
+
+function buildPRCountsQuery(
+  owner: string,
+  name: string,
+  dates: Date[]
+): string {
+  const searchQueries = dates.map(date => {
+    const isoDate = formatDateToISO(date);
+    const alias = dateToAlias(isoDate);
+    const repoFragment = `repo:${escapeGraphQLString(owner)}/${escapeGraphQLString(name)}`;
+    const openQuery = `${repoFragment} is:pr created:<${isoDate}`;
+    const closedQuery = `${repoFragment} is:pr is:closed closed:<${isoDate}`;
+    const mergedQuery = `${repoFragment} is:pr is:merged merged:<${isoDate}`;
+    const queries = [
+      `pr_open_${alias}: search(query: "${escapeGraphQLString(openQuery)}", type: ISSUE, first: 0) { issueCount }`,
+      `pr_closed_${alias}: search(query: "${escapeGraphQLString(closedQuery)}", type: ISSUE, first: 0) { issueCount }`,
+      `pr_merged_${alias}: search(query: "${escapeGraphQLString(mergedQuery)}", type: ISSUE, first: 0) { issueCount }`,
     ];
 
     return queries.join("\n      ");
@@ -220,4 +308,4 @@ function escapeGraphQLString(value: string): string {
 }
 
 export { GitHubGraphQLClient };
-export type { RepositoryInfo, RateLimitInfo };
+export type { RepositoryInfo, RateLimitInfo, IssueCounts, PRCounts };
